@@ -20,10 +20,11 @@ class ChanceTest {
 
   @Test
   void thresholdIsTimeOrAtMostQuarterOfOriginal() {
-    assertFalse(Events.shouldGlow(179999, 0, 8, 3, 180));
+    assertFalse(Events.shouldGlow(900000, 0, 8, 8, 180));
+    assertFalse(Events.shouldGlow(180000, 1, 8, 3, 180));
     assertTrue(Events.shouldGlow(179999, 0, 8, 2, 180));
-    assertTrue(Events.shouldGlow(180000, 0, 8, 8, 180));
-    assertFalse(Events.shouldGlow(180000, 0, 0, 0, 180));
-    assertFalse(Events.shouldGlow(180000, 0, 3, 0, 180));
+    assertTrue(Events.shouldGlow(180001, 1, 8, 8, 180));
+    assertFalse(Events.shouldGlow(180001, 1, 0, 0, 180));
+    assertFalse(Events.shouldGlow(180001, 1, 3, 0, 180));
   }
 }

@@ -13,6 +13,15 @@ public final class Configuration {
   public long revision;
   private boolean saving;
 
+  /** Only global defaults migrate. Event snapshots keep their former speed. */
+  static boolean migrate(Config config) {
+    if (config.schemaVersion >= 1) return false;
+    if (config.settings == null) config.settings = new Settings();
+    if (config.settings.speed == .5) config.settings.speed = 3;
+    config.schemaVersion = 1;
+    return true;
+  }
+
   public Configuration(SupplyDropsPlugin p, Config c) {
     plugin = p;
     current = c;
@@ -52,6 +61,7 @@ public final class Configuration {
 
   public static Config examples() {
     Config c = new Config();
+    migrate(c);
     BlockTable b = new BlockTable();
     b.name = "Example materials";
     b.entries.add(new BlockEntry("GOLD_BLOCK", 10));

@@ -24,16 +24,43 @@ public final class Events {
   public final RuntimeData data;
   public final NamespacedKey eventKey, guardianKey;
   private final RandomGenerator rng = new Random();
-  private final Map<String, List<FallingBlock>> falling = new HashMap<>();
+  private final Map<String, BarrelFlight> barrels = new HashMap<>();
   private final Map<String, BossBar> bars = new HashMap<>();
   private final Set<String> busy = new HashSet<>(), searching = new HashSet<>();
   private final Map<String, Set<Chunk>> tickets = new HashMap<>();
   private boolean failed;
 
-  static boolean shouldGlow(long now, long guardedAt, int total, int remaining, int delaySeconds) {
+  static boolean shouldGlow(long now, long startedAt, int total, int remaining, int delaySeconds) {
     return total > 0
         && remaining > 0
-        && (now - guardedAt >= delaySeconds * 1000L || remaining * 4 <= total);
+        && ((startedAt > 0 && now - startedAt >= delaySeconds * 1000L) || remaining * 4 <= total);
+  }
+
+  static boolean eligibleForGlow(GameMode mode, double distanceSquared, double radius) {
+    return (mode == GameMode.SURVIVAL || mode == GameMode.ADVENTURE)
+        && distanceSquared <= radius * radius;
+  }
+
+  boolean observePlayers(Drop d, Collection<? extends Player> players, long now) {
+    if (d.stage != Stage.GUARDED
+        || d.glowStartedAt != 0
+        || d.glowRevealed
+        || d.guardians.stream().allMatch(g -> g.defeated)) return false;
+    for (Player player : players) {
+      if (!player.getWorld().getName().equals(d.world)) continue;
+      Location at = player.getLocation();
+      double dx = at.getX() - (d.origin.x() + .5);
+      double dy = at.getY() - d.origin.y();
+      double dz = at.getZ() - (d.origin.z() + .5);
+      if (eligibleForGlow(
+          player.getGameMode(),
+          dx * dx + dy * dy + dz * dz,
+          settings(d).guardianActivationRadius)) {
+        d.glowStartedAt = now;
+        return true;
+      }
+    }
+    return false;
   }
 
   static Settings legacy(Profile p) {
@@ -100,11 +127,9 @@ public final class Events {
   }
 
   public void recover() {
-    long recoveredAt = System.currentTimeMillis();
     for (Drop d : data.drops.values()) {
       if (d.settings == null) d.settings = legacy(d.profile);
       if (d.initialHeight <= 0) d.initialHeight = initialHeight(d);
-      if (d.stage == Stage.GUARDED && d.guardedAt == 0) d.guardedAt = recoveredAt;
       World w = Bukkit.getWorld(d.world);
       if (w == null) continue;
       if (active(d)) {
@@ -112,19 +137,22 @@ public final class Events {
         // Chunk loading makes persistent entities available before identity reconciliation.
         for (Chunk c : tickets.getOrDefault(d.id, Set.of())) c.getEntities();
         for (Guardian guardian : d.guardians) {
-          if (guardian.defeated || guardian.health <= 0) continue;
+          if (guardian.defeated) continue;
           for (LivingEntity mob : w.getLivingEntities())
             if (guardian.token.equals(
                 mob.getPersistentDataContainer().get(guardianKey, PersistentDataType.STRING))) {
+              if (mob.isGlowing()) d.glowRevealed = true;
               var maximum = mob.getAttribute(Attribute.MAX_HEALTH);
-              if (maximum != null) mob.setHealth(Math.min(guardian.health, maximum.getValue()));
+              if (maximum != null && guardian.health > 0)
+                mob.setHealth(Math.min(guardian.health, maximum.getValue()));
             }
         }
-        removeFalling(d, w);
-        if (d.stage == Stage.DESCENDING) spawnFalling(d, w);
+        removeVisual(d, w);
+        if (d.stage == Stage.DESCENDING || d.stage == Stage.LANDING) spawnBarrel(d, w);
       } else if (d.stage == Stage.CANCELLED) cleanCancelled(d, w);
     }
     for (World w : Bukkit.getWorlds()) for (Entity e : w.getEntities()) reconcileEntity(e);
+    plugin.store.save("runtime", data).join();
   }
 
   public void reconcileEntity(Entity e) {
@@ -140,7 +168,10 @@ public final class Events {
       e.remove();
       return;
     }
-    if (e instanceof FallingBlock f && !falling.getOrDefault(id, List.of()).contains(f)) e.remove();
+    if (guardian != null && !guardian.defeated && e.isGlowing()) d.glowRevealed = true;
+    if (e instanceof FallingBlock) e.remove();
+    if (e instanceof BlockDisplay display
+        && (barrels.get(id) == null || barrels.get(id).display != display)) e.remove();
   }
 
   private void hold(Drop d, World w) {
@@ -255,7 +286,7 @@ public final class Events {
       if (error == null) {
         d.origin = origin;
         d.cells = site.cells();
-        d.initialHeight = site.fallDistance();
+        d.initialHeight = d.settings.launchDistance;
         d.remainingHeight = d.initialHeight;
         d.announceAt = System.currentTimeMillis();
         data.drops.put(d.id, d);
@@ -317,7 +348,7 @@ public final class Events {
                 "{eta}",
                 ""
                     + (settings(d).delaySeconds
-                        + (int) Math.ceil(initialHeight(d) / settings(d).speed)));
+                        + BarrelFlight.eta(initialHeight(d), settings(d).speed)));
     Component text = MiniMessage.miniMessage().deserialize(msg);
     for (Player p : Bukkit.getOnlinePlayers()) {
       p.sendMessage(text);
@@ -339,19 +370,27 @@ public final class Events {
         continue;
       }
       hold(d, w);
-      if (!d.error.isBlank()) continue;
+      if (!d.error.isBlank()) {
+        if (d.stage == Stage.LANDING
+            && (barrels.get(d.id) == null || !barrels.get(d.id).display.isValid()))
+          spawnBarrel(d, w);
+        continue;
+      }
       try {
         switch (d.stage) {
           case ANNOUNCED -> {
             if (now - d.announceAt >= settings(d).delaySeconds * 1000L) {
               d.stage = Stage.DESCENDING;
-              checkpoint(d, () -> spawnFalling(d, w));
+              checkpoint(d, () -> spawnBarrel(d, w));
             }
           }
           case DESCENDING -> {
-            d.remainingHeight = Math.max(0, d.remainingHeight - settings(d).speed / 20);
-            moveFalling(d, w);
-            if (d.remainingHeight == 0) {
+            BarrelFlight flight = barrels.get(d.id);
+            if (flight == null || !flight.display.isValid()) {
+              spawnBarrel(d, w);
+              flight = barrels.get(d.id);
+            }
+            if (flight.advance(d)) {
               d.stage = Stage.LANDING;
               checkpoint(d, () -> land(d, w));
             }
@@ -404,59 +443,45 @@ public final class Events {
     if (changed) plugin.store.save("runtime", data);
   }
 
-  private void spawnFalling(Drop d, World w) {
-    removeFalling(d, w);
-    List<FallingBlock> entities = new ArrayList<>();
-    for (Cell c : d.cells) {
-      Location l =
-          new Location(
-              w,
-              d.origin.x() + c.pos.x() + .5,
-              d.origin.y() + c.pos.y() + d.remainingHeight,
-              d.origin.z() + c.pos.z() + .5);
-      FallingBlock f = w.spawnFallingBlock(l, Bukkit.createBlockData(c.blockData));
-      f.setGravity(false);
-      f.setInvulnerable(true);
-      f.setDropItem(false);
-      f.setCancelDrop(true);
-      f.setHurtEntities(false);
-      f.shouldAutoExpire(false);
-      f.setPersistent(false);
-      f.getPersistentDataContainer().set(eventKey, PersistentDataType.STRING, d.id);
-      entities.add(f);
-    }
-    falling.put(d.id, entities);
+  private void spawnBarrel(Drop d, World w) {
+    removeVisual(d, w);
+    if (d.settings == null) d.settings = legacy(d.profile);
+    if (d.stage == Stage.LANDING) d.remainingHeight = 0;
+    var barrel = (org.bukkit.block.data.type.Barrel) Material.BARREL.createBlockData();
+    barrel.setFacing(BlockFace.UP);
+    barrel.setOpen(false);
+    BlockDisplay display =
+        w.spawn(
+            new Location(w, d.origin.x() + .5, d.origin.y(), d.origin.z() + .5),
+            BlockDisplay.class,
+            entity -> {
+              entity.setBlock(barrel);
+              entity.setTransformation(
+                  BarrelFlight.transform(d.remainingHeight, d.settings.barrelSize));
+              entity.setInterpolationDuration(0);
+              entity.setInterpolationDelay(0);
+              entity.setDisplayWidth(0);
+              entity.setDisplayHeight(0);
+              entity.setViewRange(4);
+              entity.setGravity(false);
+              entity.setInvulnerable(true);
+              entity.setPersistent(false);
+              entity.getPersistentDataContainer().set(eventKey, PersistentDataType.STRING, d.id);
+            });
+    barrels.put(d.id, new BarrelFlight(display));
   }
 
-  private void moveFalling(Drop d, World w) {
-    List<FallingBlock> entities = falling.get(d.id);
-    if (entities == null || entities.stream().anyMatch(e -> !e.isValid())) {
-      spawnFalling(d, w);
-      entities = falling.get(d.id);
-    }
-    for (int i = 0; i < d.cells.size(); i++) {
-      Cell c = d.cells.get(i);
-      FallingBlock f = entities.get(i);
-      f.setVelocity(new org.bukkit.util.Vector());
-      f.teleport(
-          new Location(
-              w,
-              d.origin.x() + c.pos.x() + .5,
-              d.origin.y() + c.pos.y() + d.remainingHeight,
-              d.origin.z() + c.pos.z() + .5));
-    }
-  }
-
-  private void removeFalling(Drop d, World w) {
-    List<FallingBlock> existing = falling.remove(d.id);
-    if (existing != null) existing.forEach(Entity::remove);
+  private void removeVisual(Drop d, World w) {
+    BarrelFlight existing = barrels.remove(d.id);
+    if (existing != null) existing.display.remove();
     for (Entity e : w.getEntities())
-      if (e instanceof FallingBlock
+      if ((e instanceof FallingBlock || e instanceof BlockDisplay)
           && d.id.equals(e.getPersistentDataContainer().get(eventKey, PersistentDataType.STRING)))
         e.remove();
   }
 
   private void land(Drop d, World w) {
+    if (barrels.get(d.id) == null || !barrels.get(d.id).display.isValid()) spawnBarrel(d, w);
     Set<Pos> planned = new HashSet<>();
     for (Cell cell : d.cells) planned.add(cell.pos);
     Map<Long, Integer> columnTops = new HashMap<>();
@@ -498,7 +523,7 @@ public final class Events {
         return;
       }
     }
-    removeFalling(d, w);
+    removeVisual(d, w);
     for (Cell c : d.cells) {
       Block b = Placement.block(w, d, c);
       b.setBlockData(Bukkit.createBlockData(c.blockData), false);
@@ -519,7 +544,23 @@ public final class Events {
   }
 
   private void reconcileGuardians(Drop d, World w) {
-    boolean all = true;
+    int remaining = (int) d.guardians.stream().filter(g -> !g.defeated).count();
+    if (remaining == 0) {
+      unlock(d, false);
+      return;
+    }
+    long now = System.currentTimeMillis();
+    if (observePlayers(d, w.getPlayers(), now)) {
+      checkpoint(d, () -> {});
+      return;
+    }
+    if (!d.glowRevealed
+        && shouldGlow(
+            now, d.glowStartedAt, d.guardians.size(), remaining, settings(d).guardianGlowSeconds)) {
+      d.glowRevealed = true;
+      checkpoint(d, () -> {});
+      return;
+    }
     for (Guardian g : d.guardians) {
       if (g.defeated) {
         if (g.entityId != null) {
@@ -528,7 +569,6 @@ public final class Events {
         }
         continue;
       }
-      all = false;
       LivingEntity mob =
           g.entityId == null
               ? null
@@ -549,12 +589,7 @@ public final class Events {
         if (mob == null) mob = spawnGuardian(d, g, w);
         g.entityId = mob.getUniqueId().toString();
       }
-      if (shouldGlow(
-          System.currentTimeMillis(),
-          d.guardedAt,
-          d.guardians.size(),
-          (int) d.guardians.stream().filter(guardian -> !guardian.defeated).count(),
-          settings(d).guardianGlowSeconds)) mob.setGlowing(true);
+      if (d.glowRevealed) mob.setGlowing(true);
       g.health = mob.getHealth();
       Location anchor = guardianLocation(d, g, w);
       if (mob.getLocation().distanceSquared(anchor) > g.spec.radius * g.spec.radius
@@ -565,7 +600,6 @@ public final class Events {
               && player.getLocation().distanceSquared(anchor) < g.spec.radius * g.spec.radius)
             ward.setAnger(player, 150);
     }
-    if (all) unlock(d, false);
   }
 
   private Location guardianLocation(Drop d, Guardian g, World w) {
@@ -683,7 +717,7 @@ public final class Events {
   }
 
   private void cleanCancelled(Drop d, World w) {
-    removeFalling(d, w);
+    removeVisual(d, w);
     for (Entity e : w.getEntities())
       if (d.id.equals(e.getPersistentDataContainer().get(eventKey, PersistentDataType.STRING)))
         e.remove();
@@ -746,7 +780,7 @@ public final class Events {
                 ? remaining + " guardians"
                 : d.stage == Stage.ANNOUNCED
                     ? "Announced"
-                    : (int) Math.ceil(d.remainingHeight / settings(d).speed) + "s to landing";
+                    : BarrelFlight.eta(d.remainingHeight, settings(d).speed) + "s to landing";
     bar.name(Component.text("Supply drop • " + coordinates(d) + " • " + status));
     bar.progress(
         (float)
@@ -766,7 +800,7 @@ public final class Events {
     for (Drop d : data.drops.values()) {
       World w = Bukkit.getWorld(d.world);
       if (w != null && active(d)) {
-        removeFalling(d, w);
+        removeVisual(d, w);
         w.save();
       }
       release(d);

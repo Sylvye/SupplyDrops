@@ -22,7 +22,7 @@ public class SupplyDropsPlugin extends JavaPlugin implements CommandExecutor, Ta
       if (initial == null) {
         initial = Configuration.examples();
         store.save("config", initial).join();
-      }
+      } else if (Configuration.migrate(initial)) store.save("config", initial).join();
       config = new Configuration(this, initial);
       events = new Events(this, store.read("runtime", RuntimeData.class, new RuntimeData()));
       menus = new Menus(this);

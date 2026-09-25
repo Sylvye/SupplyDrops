@@ -2,16 +2,18 @@
 
 Environment: Java 25.0.4.1, Paper 26.2 build 129, macOS arm64.
 
-- Production JAR compilation: PASS.
-- JUnit: 10 tests passed; 0 failures or skips.
-- Paper integration: 12 phases passed across actual server restarts.
-- Production JAR startup, console commands, and clean shutdown: PASS.
-- Production JAR excludes the integration test harness.
+- Production JAR compilation and packaging: PASS; includes barrel animation and excludes the integration harness.
+- JUnit: 15 tests passed; 0 failures or skips.
+- Paper integration: all 14 phases passed across actual server restarts.
 
-Coverage: all 23 container types; custom item serialization and copy safety; inventory capacity; weighted generation and chance formatting; connected/supporting pile layouts and opening clearance across gentle slopes; SQLite snapshots and legacy global-settings migration; stale editor saves; native dialog creation; GUI click cancellation and dirty-close warning; descent exceeding 30 seconds; recovery during announcement, descent, partial placement, combat, and after unlocking; guardian replacement, glow threshold, health, effects, confinement, and nine example mob types; hopper and copper-golem protection; explosion protection; empty encounters; cancellation; obstruction pause/retry; sand, gravel, vegetation, entities, water, world borders, and unavailable-world rejection. A 200-candidate loaded mixed-terrain sample accepted 82 sand and 89 inland sites in 21 ms.
+New coverage: linear interpolation segments, final-segment completion before landing, relative launch coordinates and ETA, one upright closed barrel with ground-level tracking, four-block scale, disabled frustum culling, increased view range, missing-display replacement, legacy and duplicate entity cleanup, low/high terrain landings, retained barrel during obstruction pauses, and display removal after landing or cancellation. Global speed migration preserves custom values and active snapshots.
 
-Client-side appearance and full multiplayer combat have not been visually tested with a Minecraft client. Abrupt hardware failure is subject to Minecraft world-save durability; the restart suite exercises normal server restarts and partial-placement recovery.
+Guardian checks cover unarmed unattended drops, the independent 25% threshold, the exact three-dimensional 32-block activation boundary, Survival/Adventure eligibility, Creative/Spectator exclusion, retained activation after players leave, timer progression across restart without players, and glowing replacement guardians. Unit persistence checks include the activation timestamp and reveal flag.
+
+Regression coverage includes all 23 container types, custom items, capacity, weighted generation, terrain and slope checks, SQLite snapshots, stale saves, GUI draft warnings, long descents, announcement/descent/partial-placement/combat/unlocked recovery, guardian customization and confinement, extraction/explosion protection, empty encounters, cancellation, and obstruction retries.
+
+Client visual verification was not completed: the UI tool could not access the running Minecraft game window. Server tests verify interpolation metadata and lifecycle behavior, but smoothness and appearance when joining or approaching mid-descent still require a Minecraft client check. Normal client/server view-distance limits apply.
 
 Reproduce with the commands in README.md. Detailed logs are in `build/integration-server/`; JUnit HTML is in `build/reports/tests/test/index.html`.
 
-Production JAR SHA-256: `5fc506e07afb177276888d4f71ac43d53b6a72cdfc6f8432852fcb306b0d2ecc`
+Production JAR SHA-256: `c43112bc56f367499edb1c0e0833094d1944ccd3b4e94b35c0db6e1b0278bd44`

@@ -17,6 +17,8 @@ class StoreTest {
     Drop drop = new Drop();
     drop.stage = Stage.DESCENDING;
     drop.remainingHeight = 37.2;
+    drop.glowStartedAt = 123456789;
+    drop.glowRevealed = true;
     runtime.drops.put(drop.id, drop);
     try (Store s = new Store(file)) {
       s.save("runtime", runtime).join();
@@ -25,6 +27,8 @@ class StoreTest {
     try (Store s = new Store(file)) {
       RuntimeData loaded = s.read("runtime", RuntimeData.class, null);
       assertEquals(37.2, loaded.drops.get(drop.id).remainingHeight);
+      assertEquals(123456789, loaded.drops.get(drop.id).glowStartedAt);
+      assertTrue(loaded.drops.get(drop.id).glowRevealed);
       loaded.drops.get(drop.id).stage = Stage.UNLOCKED;
       s.save("runtime", loaded).join();
     }
@@ -51,7 +55,10 @@ class StoreTest {
     assertEquals(1000, migrated.settings.radius);
     assertEquals(60, migrated.settings.delaySeconds);
     assertEquals(180, migrated.settings.guardianGlowSeconds);
-    assertEquals(.5, migrated.settings.speed);
+    assertEquals(3, migrated.settings.speed);
+    assertEquals(64, migrated.settings.launchDistance);
+    assertEquals(4, migrated.settings.barrelSize);
+    assertEquals(32, migrated.settings.guardianActivationRadius);
     Profile former = new Profile();
     former.radius = 80;
     former.speed = 2;
@@ -60,5 +67,24 @@ class StoreTest {
     assertEquals(80, snapshot.radius);
     assertEquals(2, snapshot.speed);
     assertEquals(13, snapshot.delaySeconds);
+  }
+
+  @Test
+  void speedMigrationIsOneTimeAndKeepsCustomValuesAndEventSnapshots() {
+    Config config = Store.JSON.fromJson("{\"settings\":{\"speed\":0.5}}", Config.class);
+    Drop active = new Drop();
+    active.settings = Store.copy(config.settings, Settings.class);
+    assertTrue(Configuration.migrate(config));
+    assertEquals(3, config.settings.speed);
+    assertEquals(.5, active.settings.speed);
+    config.settings.speed = .5;
+    assertFalse(Configuration.migrate(config));
+    assertEquals(.5, config.settings.speed);
+    Config custom = Store.JSON.fromJson("{\"settings\":{\"speed\":2}}", Config.class);
+    Configuration.migrate(custom);
+    assertEquals(2, custom.settings.speed);
+    Drop old = Store.JSON.fromJson("{\"guardedAt\":1}", Drop.class);
+    assertEquals(0, old.glowStartedAt);
+    assertFalse(old.glowRevealed);
   }
 }

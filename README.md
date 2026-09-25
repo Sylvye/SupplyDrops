@@ -20,7 +20,7 @@ The dashboard contains **Profiles**, **Block Tables**, **Item Tables**, **Guardi
 - **Item tables:** copy any item from your inventory, including held items, without consuming it. Metadata, enchantments, custom components, and persistent data are retained. Set entry weights, quantity ranges, and table roll ranges. Worst-case contents must fit 27 slots. Each roll selects with replacement, then fills randomly selected slots without exceeding stack limits.
 - **Container assignments:** normal chests, barrels, all four waxed copper chest variants, and uncolored plus all 16 colored shulkers each have an independent mapping. Multiple mappings can share a table.
 - **Guardian encounters:** weighted groups of mobs, including empty encounters. Edit counts, names, health (`0` means vanilla), equipment copied from inventory, effects, vanilla drops, custom item-table drops, and confinement radius. An amplifier of `0` is potion level I.
-- **Settings:** global radius, fall speed, announcement text and delay, sound, title and boss-bar toggles, guardian glow timer, and maximum concurrent unfinished events per world.
+- **Settings:** global radius, fall speed, launch distance above the destination, barrel width, announcement text and delay, sound, title and boss-bar toggles, guardian glow timer and activation radius, and maximum concurrent unfinished events per world.
 
 Each block, item, and encounter entry shows its weight in gold and its effective single-roll chance in pink. Search filters do not change the chance denominator.
 
@@ -54,16 +54,18 @@ Editing, spawning, and management default to operators. `supplydrops.admin` gran
 
 ## Event rules
 
-Defaults: global radius **1,000**, **20–40** blocks, **60s** announcement delay, **0.5 blocks/second** descent from the world's maximum build height, guardian glow after **180s** or when at most **25%** remain, **60-minute** schedule, at least **one online player**, and **one unfinished event per world**. Animation advances with server ticks; low TPS lengthens descent.
+Defaults: global radius **1,000**, **20–40** blocks, **60s** announcement delay, **3 blocks/second** descent from **64 blocks above the destination**, a **4-block-wide barrel**, guardian glow **180s after the first nearby player arrives** or when at most **25%** remain, **60-minute** schedule, at least **one online player**, and **one unfinished event per world**. Default descent takes about 21.3 seconds, plus the 60-second announcement delay. Animation advances with server ticks; low TPS lengthens descent.
 
 - Random positions are sampled uniformly within the radius and constrained by the world border. Location searches check up to eight candidates per tick, stop after 100, and report the leading rejection reasons. Sand and gravel provide valid dry support. Soft plants can be replaced at landing; liquids, tile entities, and solid blocks cannot. Terrain may vary by up to two blocks when the adjusted pile stays supported and connected. Entities do not obstruct placement. No claim-plugin integration is performed.
 - Piles have connected, supported layouts. Chests remain single, with no event blocks above them. Shulkers face upward with opening clearance. Consecutive identical layouts are retried; small/constrained tables cannot guarantee infinite unique layouts.
-- Actual falling-block entities are invulnerable, do not drop items or damage players, and have vanilla expiry and placement disabled. Loot is materialized at landing.
+- A single upright, closed barrel display descends smoothly using client interpolation. Its tracking position stays at the destination while the visual moves above it, avoiding altitude-based tracking loss. It has no collision or loot and is replaced by the saved pile on landing. Launch distance is independent of terrain elevation, including near build height; normal client and server view-distance limits still apply.
 - Landing columns and support are reserved. Mining, placement, interaction, explosions, pistons, fluid flow, and inventory extraction are blocked while locked. Direct world changes by another plugin can pause landing; admins receive the location and can clear it and retry.
-- Guardians spawn at landing. Surviving guardians glow after the global timer or when at most 25% remain; replacements regain glow after a restart. Natural disappearance is reconciled by respawning the missing guardian. Environmental damage and friendly fire do not defeat them; player combat and player-owned pets do. Confinement, conversion prevention, and portal protection keep encounters local.
+- Guardians spawn at landing. The glow timer starts only after a Survival or Adventure player comes within the global activation radius (default 32 blocks, measured in three dimensions) of the landed pile. It then continues after players leave and across restarts, including offline time. The independent 25%-remaining trigger still reveals survivors immediately. Replacements inherit revealed glow. Natural disappearance is reconciled by respawning the missing guardian. Environmental damage and friendly fire do not defeat them; player combat and player-owned pets do. Confinement, conversion prevention, and portal protection keep encounters local.
 - EMPTY encounters unlock immediately. Once unlocked, the blocks become ordinary permanent world blocks. SupplyDrops does not clean them up, protect them, or refill their containers.
 - Schedules do not accumulate missed events. If player counts or concurrency prevent a scheduled drop, the next attempt is the next interval.
 - Announced, descending, landing, and guarded events recover after restarts without rerolling. SQLite checkpoints precede transitions; landing is replayable while locked. World saves at landing/unlock coordinate world and plugin state. Filesystem/hardware failures remain subject to the server's own world durability.
+
+On upgrade, the former global default speed of 0.5 becomes 3 blocks/second; other saved speeds remain unchanged. Active events retain their saved timing and remaining distance, with the barrel replacing their old visual. Existing guarded drops wait for a nearby player before starting the new timer; already revealed glow is retained. Settings changes apply to future events only.
 
 ## Build and verification
 
@@ -75,7 +77,7 @@ Install Java 25 and run:
 
 The Gradle wrapper is included. The production JAR bundles SQLite; Paper supplies Adventure and Gson. No network download is needed by the plugin itself at startup.
 
-Unit tests cover weighted distributions, chance formatting, glow thresholds, invalid weights/ranges, scheduling conditions, pile connectivity/support/clearance, global-settings migration, snapshot isolation, and SQLite reopen behavior.
+Unit tests cover weighted distributions, chance formatting, glow thresholds and player proximity, interpolation endpoints and landing timing, invalid weights/ranges, scheduling conditions, pile connectivity/support/clearance, global-settings migration, snapshot isolation, and SQLite reopen behavior.
 
 Run the isolated Paper integration suite with a Paper 26.2 server JAR:
 
@@ -85,6 +87,6 @@ PAPER_JAR=/absolute/path/to/paper-26.2.jar \
 EULA=true python3 scripts/integration.py
 ```
 
-`EULA=true` confirms acceptance of the Minecraft EULA for that local test server. Tests use only `build/integration-server`, bind to `127.0.0.1:25579`, and restart the server through lifecycle stages. Logs remain in that directory. They exercise all 23 containers, copied metadata, capacity checks, stale saves, descent past 30 seconds, guardian reconciliation and glowing, extraction/explosion protection, partial landing recovery, empty encounters, cancellation, permanent unlocked loot across restarts, GUI copy/click safety and draft warnings, native dialog creation, guardian customization, copper-golem protection, terrain classification, slopes, world-height launch, and obstruction retries.
+`EULA=true` confirms acceptance of the Minecraft EULA for that local test server. Tests use only `build/integration-server`, bind to `127.0.0.1:25579`, and restart the server through lifecycle stages. Logs remain in that directory. They exercise all 23 containers, copied metadata, capacity checks, stale saves, descent past 30 seconds, guardian reconciliation and glowing, extraction/explosion protection, partial landing recovery, empty encounters, cancellation, permanent unlocked loot across restarts, GUI copy/click safety and draft warnings, native dialog creation, guardian customization, copper-golem protection, terrain classification, slopes, relative launch at low and high elevations, display replacement and cleanup, proximity activation and restart recovery, and obstruction retries.
 
 Before a public rollout, also check menu appearance, native dialogs, item copying, and combat with a real Minecraft 26.2 client. Automated server tests cannot judge client-side presentation.

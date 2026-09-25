@@ -100,8 +100,7 @@ public final class Menus implements Listener {
               Component.text("Weight: " + weight, NamedTextColor.GOLD)
                   .decoration(TextDecoration.ITALIC, false));
           lore.add(
-              Component.text("Chance: " + chance, PINK)
-                  .decoration(TextDecoration.ITALIC, false));
+              Component.text("Chance: " + chance, PINK).decoration(TextDecoration.ITALIC, false));
           meta.lore(lore);
         });
     return new Button(item, action);
@@ -646,6 +645,10 @@ public final class Menus implements Listener {
 
   private String label(String name) {
     if (name.equals("speed")) return "Fall speed (blocks / second)";
+    if (name.equals("launchDistance")) return "Launch distance above destination (blocks)";
+    if (name.equals("barrelSize")) return "Barrel width (blocks)";
+    if (name.equals("guardianActivationRadius")) return "Guardian activation radius (blocks)";
+    if (name.equals("guardianGlowSeconds")) return "Glow delay after player arrival (seconds)";
     if (name.equals("radius")) return "Radius from 0, 0 (blocks)";
     if (name.equals("announce")) return "Announcement • MiniMessage";
     return Character.toUpperCase(name.charAt(0))
@@ -1045,6 +1048,9 @@ public final class Menus implements Listener {
         List.of(
             "radius",
             "speed",
+            "launchDistance",
+            "barrelSize",
+            "guardianActivationRadius",
             "delaySeconds",
             "guardianGlowSeconds",
             "announce",

@@ -148,7 +148,7 @@ public final class Protection implements Listener {
   public void damage(EntityDamageEvent e) {
     var d = events.owner(e.getEntity());
     if (d == null) return;
-    if (e.getEntity() instanceof FallingBlock) {
+    if (e.getEntity() instanceof FallingBlock || e.getEntity() instanceof BlockDisplay) {
       e.setCancelled(true);
       return;
     }

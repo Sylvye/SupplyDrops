@@ -138,6 +138,9 @@ public final class Validation {
     range(settings.radius, 1, 100000, "Radius");
     range(settings.delaySeconds, 0, 3600, "Announcement delay");
     range(settings.guardianGlowSeconds, 0, 86400, "Guardian glow delay");
+    range(settings.launchDistance, 8, 256, "Launch distance");
+    range(settings.barrelSize, 1, 8, "Barrel size");
+    range(settings.guardianActivationRadius, 1, 128, "Guardian activation radius");
     require(
         Double.isFinite(settings.speed) && settings.speed >= .05 && settings.speed <= 20,
         "Speed must be 0.05–20 blocks/second");

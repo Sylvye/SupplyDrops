@@ -102,8 +102,9 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
                   () -> {
                     check(d.stage == Stage.DESCENDING, "Descent exceeds vanilla expiry");
                     check(
-                        world.getEntitiesByClass(FallingBlock.class).size() == d.cells.size(),
-                        "All falling entities persist after 30 seconds");
+                        world.getEntitiesByClass(BlockDisplay.class).size() == 1
+                            && world.getEntitiesByClass(FallingBlock.class).isEmpty(),
+                        "One barrel persists after 30 seconds without legacy falling blocks");
                     d.remainingHeight = 1;
                     pass();
                   });
@@ -114,7 +115,7 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
         check(d.stage == Stage.DESCENDING, "Descent survived restart");
         check(d.remainingHeight < 1.1, "Descent progress restored");
         d.remainingHeight = .1;
-        d.profile.speed = 20;
+        d.settings.speed = 20;
         await(
             () -> d.stage == Stage.GUARDED,
             () -> {
@@ -239,6 +240,8 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
       case 9 -> failurePaths();
       case 10 -> terrainAndGlow();
       case 11 -> guiCloseWarnings();
+      case 12 -> barrelAndActivation();
+      case 13 -> glowRestart();
       default -> throw new AssertionError("Unknown phase");
     }
   }
@@ -405,6 +408,8 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
                       () -> empty.stage == Stage.UNLOCKED,
                       () -> {
                         check(empty.cells.size() == 2, "Master roll count");
+                        check(empty.initialHeight == 64, "Low terrain uses fixed launch distance");
+                        check(barrelFor(empty) == null, "Successful landing removes barrel");
                         p.delaySeconds = 3600;
                         events.spawn(
                             "empty",
@@ -621,9 +626,12 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
     later(
         8,
         () -> {
-          check(
-              !d.error.isBlank() && d.stage == Stage.LANDING, "Solid overhead pauses landing");
+          check(!d.error.isBlank() && d.stage == Stage.LANDING, "Solid overhead pauses landing");
           check(base.getType().isAir(), "Obstructed landing does not overwrite world");
+          BlockDisplay waiting = barrelFor(d);
+          check(
+              waiting != null && waiting.getTransformation().getTranslation().y == 0,
+              "Paused landing retains barrel at destination");
           Entity golem =
               world.spawnEntity(new Location(world, -22, 90, -20), EntityType.COPPER_GOLEM);
           var transport =
@@ -674,7 +682,8 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
     world.getBlockAt(x, 89, z).setType(Material.SAND, false);
     world.getBlockAt(x, 90, z).setType(Material.SHORT_GRASS, false);
     check(Placement.site(world, origin, one, true).valid(), "Dry sand and grass accepted");
-    Entity occupant = world.spawnEntity(new Location(world, x + .5, 90, z + .5), EntityType.ARMOR_STAND);
+    Entity occupant =
+        world.spawnEntity(new Location(world, x + .5, 90, z + .5), EntityType.ARMOR_STAND);
     check(Placement.site(world, origin, one, true).valid(), "Entity does not obstruct site");
     occupant.remove();
     world.getBlockAt(x, 89, z).setType(Material.WATER, false);
@@ -693,11 +702,17 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
     world.getBlockAt(x + 1, 90, z).setType(Material.STONE, false);
     Placement.Site site = Placement.site(world, origin, slope, true);
     check(site.valid(), "Two-level connected slope accepted: " + site.error());
-    check(Placement.connected(site.cells().stream().map(cell -> cell.pos).collect(java.util.stream.Collectors.toSet())), "Adjusted slope stays connected");
-    check(origin.y() + site.cells().stream().mapToInt(cell -> cell.pos.y()).max().orElseThrow() + site.fallDistance() == world.getMaxHeight() - 1, "Launches at world height");
+    check(
+        Placement.connected(
+            site.cells().stream()
+                .map(cell -> cell.pos)
+                .collect(java.util.stream.Collectors.toSet())),
+        "Adjusted slope stays connected");
+    check(site.origin().equals(origin), "Slope adjustment preserves destination base");
     for (int sx = 14; sx <= 46; sx++)
       for (int sz = 14; sz <= 46; sz++) {
-        world.getBlockAt(sx, 89, sz)
+        world
+            .getBlockAt(sx, 89, sz)
             .setType(sz > 38 ? Material.WATER : sx < 30 ? Material.SAND : Material.STONE, false);
         world.getBlockAt(sx, 90, sz).setType(Material.AIR, false);
       }
@@ -707,7 +722,8 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
     for (int i = 0; i < 200; i++) {
       Pos sampled = Placement.random(world, 16, random);
       int sx = sampled.x() + 30, sz = sampled.z() + 30;
-      Pos shifted = new Pos(sx, world.getHighestBlockYAt(sx, sz, HeightMap.MOTION_BLOCKING) + 1, sz);
+      Pos shifted =
+          new Pos(sx, world.getHighestBlockYAt(sx, sz, HeightMap.MOTION_BLOCKING) + 1, sz);
       if (Placement.site(world, shifted, one, true).valid()) {
         if (sx < 30) sand++;
         else inland++;
@@ -715,8 +731,17 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
     }
     long elapsedMillis = (System.nanoTime() - searchStarted) / 1_000_000;
     check(sand > 35 && inland > 35, "Mixed-terrain sample reaches sand and inland");
-    check(elapsedMillis < 1000, "200 loaded candidate checks finish in one second: " + elapsedMillis);
-    getLogger().info("Mixed-terrain site sample: sand=" + sand + " inland=" + inland + " elapsed=" + elapsedMillis + "ms");
+    check(
+        elapsedMillis < 1000, "200 loaded candidate checks finish in one second: " + elapsedMillis);
+    getLogger()
+        .info(
+            "Mixed-terrain site sample: sand="
+                + sand
+                + " inland="
+                + inland
+                + " elapsed="
+                + elapsedMillis
+                + "ms");
     long now = System.currentTimeMillis();
     check(!Events.shouldGlow(now, now, 8, 3, 180), "Above 25 percent remains unlit");
     check(Events.shouldGlow(now, now, 8, 2, 180), "Exactly 25 percent glows");
@@ -749,7 +774,8 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
               6,
               () -> {
                 var survivor = glow.guardians.get(3);
-                LivingEntity mob = (LivingEntity) Bukkit.getEntity(UUID.fromString(survivor.entityId));
+                LivingEntity mob =
+                    (LivingEntity) Bukkit.getEntity(UUID.fromString(survivor.entityId));
                 check(mob != null && mob.isGlowing(), "Last quarter glows in world");
                 mob.remove();
                 later(
@@ -757,7 +783,9 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
                     () -> {
                       LivingEntity replacement =
                           (LivingEntity) Bukkit.getEntity(UUID.fromString(survivor.entityId));
-                      check(replacement != null && replacement.isGlowing(), "Replacement regains glow");
+                      check(
+                          replacement != null && replacement.isGlowing(),
+                          "Replacement regains glow");
                       events.unlock(glow, true);
                       pass();
                     });
@@ -765,11 +793,261 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
         });
   }
 
+  BlockDisplay barrelFor(Drop drop) {
+    return world.getEntitiesByClass(BlockDisplay.class).stream()
+        .filter(
+            e ->
+                drop.id.equals(
+                    e.getPersistentDataContainer().get(events.eventKey, PersistentDataType.STRING)))
+        .findFirst()
+        .orElse(null);
+  }
+
+  void barrelAndActivation() {
+    int landingY = world.getMaxHeight() - 2;
+    for (int x = 55; x <= 65; x++)
+      for (int z = 15; z <= 25; z++)
+        world.getBlockAt(x, landingY - 1, z).setType(Material.STONE, false);
+    Config c = config.current;
+    c.settings = new Settings();
+    c.settings.delaySeconds = 0;
+    Profile profile = Store.copy(c.profiles.get("Example"), Profile.class);
+    profile.enabled = true;
+    profile.minRolls = profile.maxRolls = 1;
+    BlockTable blocks = new BlockTable();
+    blocks.entries.add(new BlockEntry("GOLD_BLOCK", 1));
+    c.blocks.put("barrel-test", blocks);
+    profile.blockTable = "barrel-test";
+    EncounterTable guardians = new EncounterTable();
+    Encounter encounter = new Encounter();
+    MobSpec spec = new MobSpec();
+    spec.type = "HUSK";
+    spec.count = 4;
+    encounter.mobs.add(spec);
+    guardians.entries.add(encounter);
+    c.guardians.put("barrel-test", guardians);
+    profile.guardianTable = "barrel-test";
+    c.profiles.put("barrel-test", profile);
+    events.spawn(
+        "barrel-test",
+        new Location(world, 60, landingY, 20),
+        message ->
+            guard(
+                () -> {
+                  check(message.startsWith("Event"), "High-altitude spawn accepted: " + message);
+                  Drop d =
+                      events.data.drops.values().stream()
+                          .filter(drop -> drop.profileId.equals("barrel-test"))
+                          .findFirst()
+                          .orElseThrow();
+                  check(
+                      d.initialHeight == 64 && d.settings.speed == 3,
+                      "New event snapshots default descent");
+                  c.settings.speed = 20;
+                  c.settings.launchDistance = 8;
+                  c.settings.barrelSize = 1;
+                  check(
+                      d.settings.speed == 3
+                          && d.settings.launchDistance == 64
+                          && d.settings.barrelSize == 4,
+                      "Global edits do not alter active barrel");
+                  await(
+                      () -> d.stage == Stage.DESCENDING,
+                      () -> {
+                        BlockDisplay display = barrelFor(d);
+                        check(display != null, "Barrel display exists");
+                        check(
+                            display.getLocation().getY() == landingY,
+                            "Tracking position remains at destination");
+                        check(
+                            display.getBlock().getMaterial() == Material.BARREL,
+                            "Barrel material rendered");
+                        var data = (org.bukkit.block.data.type.Barrel) display.getBlock();
+                        check(
+                            data.getFacing() == BlockFace.UP && !data.isOpen(),
+                            "Upright closed barrel");
+                        check(
+                            display.getTransformation().getScale().x == 4,
+                            "Four-block-wide barrel");
+                        check(
+                            display.getTransformation().getTranslation().y > 60,
+                            "Full relative launch above build height");
+                        check(
+                            display.getDisplayWidth() == 0 && display.getDisplayHeight() == 0,
+                            "Frustum culling disabled");
+                        check(
+                            display.getViewRange() == 4
+                                && !display.hasGravity()
+                                && display.isInvulnerable(),
+                            "Display visibility and protection configured");
+                        double before = d.remainingHeight;
+                        display.remove();
+                        later(
+                            6,
+                            () -> {
+                              check(
+                                  barrelFor(d) != null && barrelFor(d) != display,
+                                  "Missing display replaced");
+                              check(
+                                  d.remainingHeight <= before && d.remainingHeight > before - 2,
+                                  "Replacement preserves progress");
+                              BlockDisplay duplicate =
+                                  world.spawn(
+                                      new Location(world, 60.5, landingY, 20.5),
+                                      BlockDisplay.class);
+                              duplicate
+                                  .getPersistentDataContainer()
+                                  .set(events.eventKey, PersistentDataType.STRING, d.id);
+                              events.reconcileEntity(duplicate);
+                              check(!duplicate.isValid(), "Duplicate barrel removed");
+                              FallingBlock legacy =
+                                  world.spawnFallingBlock(
+                                      new Location(world, 60.5, landingY + 1, 20.5),
+                                      Material.GOLD_BLOCK.createBlockData());
+                              legacy
+                                  .getPersistentDataContainer()
+                                  .set(events.eventKey, PersistentDataType.STRING, d.id);
+                              events.reconcileEntity(legacy);
+                              check(!legacy.isValid(), "Legacy falling block removed");
+                              await(
+                                  () ->
+                                      d.stage == Stage.GUARDED
+                                          && d.guardians.stream().allMatch(g -> g.entityId != null),
+                                  () -> {
+                                    check(
+                                        d.remainingHeight == 0 && barrelFor(d) == null,
+                                        "Barrel removed only at completed landing");
+                                    check(
+                                        world.getBlockAt(60, landingY, 20).getType()
+                                            == Material.GOLD_BLOCK,
+                                        "High-altitude pile materialized");
+                                    check(
+                                        d.glowStartedAt == 0 && !d.glowRevealed,
+                                        "Unattended drop remains unarmed");
+                                    d.guardedAt = System.currentTimeMillis() - 1_000_000;
+                                    later(
+                                        6,
+                                        () -> {
+                                          check(
+                                              d.guardians.stream()
+                                                  .noneMatch(
+                                                      g ->
+                                                          Bukkit.getEntity(
+                                                                  UUID.fromString(g.entityId))
+                                                              .isGlowing()),
+                                              "Old landing timestamp does not reveal guardians");
+                                          long activated = System.currentTimeMillis();
+                                          Player creative =
+                                              nearbyPlayer(
+                                                  GameMode.CREATIVE,
+                                                  new Location(world, 60.5, landingY, 20.5));
+                                          check(
+                                              !events.observePlayers(
+                                                  d, List.of(creative), activated),
+                                              "Creative cannot arm timer");
+                                          Player spectator =
+                                              nearbyPlayer(
+                                                  GameMode.SPECTATOR, creative.getLocation());
+                                          check(
+                                              !events.observePlayers(
+                                                  d, List.of(spectator), activated),
+                                              "Spectator cannot arm timer");
+                                          Player outside =
+                                              nearbyPlayer(
+                                                  GameMode.SURVIVAL,
+                                                  new Location(
+                                                      world, 60.5, landingY + 32.01, 20.5));
+                                          check(
+                                              !events.observePlayers(
+                                                  d, List.of(outside), activated),
+                                              "Three-dimensional distance enforced");
+                                          Player player =
+                                              nearbyPlayer(
+                                                  GameMode.ADVENTURE,
+                                                  new Location(world, 60.5, landingY + 32, 20.5));
+                                          check(
+                                              events.observePlayers(d, List.of(player), activated),
+                                              "Player at exactly 32 blocks arms timer");
+                                          check(
+                                              !events.observePlayers(d, List.of(), activated + 1000)
+                                                  && d.glowStartedAt == activated,
+                                              "Timer persists when players leave");
+                                          d.settings.guardianGlowSeconds = 1;
+                                          store.save("runtime", events.data).join();
+                                          pass();
+                                        });
+                                  },
+                                  160);
+                            });
+                      },
+                      50);
+                }));
+  }
+
+  Player nearbyPlayer(GameMode mode, Location location) {
+    return (Player)
+        java.lang.reflect.Proxy.newProxyInstance(
+            getClassLoader(),
+            new Class<?>[] {Player.class},
+            (proxy, method, args) ->
+                switch (method.getName()) {
+                  case "getGameMode" -> mode;
+                  case "getWorld" -> location.getWorld();
+                  case "getLocation" -> location;
+                  default -> null;
+                });
+  }
+
+  void glowRestart() {
+    Drop d =
+        events.data.drops.values().stream()
+            .filter(drop -> drop.profileId.equals("barrel-test"))
+            .findFirst()
+            .orElseThrow();
+    check(d.glowStartedAt > 0, "Player activation timestamp survives restart");
+    await(
+        () ->
+            d.glowRevealed
+                && d.guardians.stream()
+                    .allMatch(
+                        g -> {
+                          Entity entity = Bukkit.getEntity(UUID.fromString(g.entityId));
+                          return entity != null && entity.isGlowing();
+                        }),
+        () -> {
+          check(
+              d.guardians.stream().noneMatch(g -> g.defeated),
+              "Timer reveals full encounter without players");
+          var guardian = d.guardians.getFirst();
+          Entity original = Bukkit.getEntity(UUID.fromString(guardian.entityId));
+          original.remove();
+          later(
+              6,
+              () -> {
+                Entity replacement = Bukkit.getEntity(UUID.fromString(guardian.entityId));
+                check(
+                    replacement != null && replacement != original && replacement.isGlowing(),
+                    "Replacement inherits persisted timer reveal");
+                events.cancel(d);
+                await(
+                    () -> d.cleaned,
+                    () -> {
+                      check(barrelFor(d) == null, "Cancellation leaves no display");
+                      check(events.active().isEmpty(), "No active events or orphaned encounter");
+                      pass();
+                    },
+                    50);
+              });
+        },
+        50);
+  }
+
   void guiCloseWarnings() {
     try {
       UUID id = UUID.randomUUID();
       var shown = new java.util.concurrent.atomic.AtomicReference<org.bukkit.inventory.Inventory>();
-      var open = new java.util.concurrent.atomic.AtomicReference<org.bukkit.inventory.InventoryView>();
+      var open =
+          new java.util.concurrent.atomic.AtomicReference<org.bukkit.inventory.InventoryView>();
       var actorRef = new java.util.concurrent.atomic.AtomicReference<Player>();
       var messages = new ArrayList<String>();
       var inventory =
@@ -825,7 +1103,9 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
       later(
           3,
           () -> {
-            check(messages.size() == 1 && messages.getFirst().contains("NOT been applied"), "Dirty close warns once");
+            check(
+                messages.size() == 1 && messages.getFirst().contains("NOT been applied"),
+                "Dirty close warns once");
             menus.open(actor);
             org.bukkit.inventory.InventoryView navigating = open.get();
             menus.inventoryClose(new InventoryCloseEvent(navigating));
@@ -839,10 +1119,12 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
                   org.bukkit.inventory.InventoryView clean = open.get();
                   open.set(mockView(Bukkit.createInventory(null, 9), inventory, actorRef));
                   menus.inventoryClose(new InventoryCloseEvent(clean));
-                  later(3, () -> {
-                    check(messages.size() == 1, "Clean close does not warn");
-                    pass();
-                  });
+                  later(
+                      3,
+                      () -> {
+                        check(messages.size() == 1, "Clean close does not warn");
+                        pass();
+                      });
                 });
           });
     } catch (Exception e) {

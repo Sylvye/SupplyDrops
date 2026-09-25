@@ -7,6 +7,7 @@ public final class Model {
   private Model() {}
 
   public static class Config {
+    public int schemaVersion;
     public Map<String, Profile> profiles = new LinkedHashMap<>();
     public Map<String, BlockTable> blocks = new LinkedHashMap<>();
     public Map<String, ItemTable> items = new LinkedHashMap<>();
@@ -17,7 +18,8 @@ public final class Model {
 
   public static class Settings {
     public int radius = 1000, delaySeconds = 60, guardianGlowSeconds = 180;
-    public double speed = .5;
+    public int launchDistance = 64, barrelSize = 4, guardianActivationRadius = 32;
+    public double speed = 3;
     public boolean titles = true, bossbar = true;
     public String announce =
         "<aqua><bold>Supply drop</bold></aqua> <gray>• {world} • {x}, {y}, {z} • arriving in"
@@ -138,6 +140,8 @@ public final class Model {
     public Settings settings;
     public int initialHeight;
     public long guardedAt;
+    public long glowStartedAt;
+    public boolean glowRevealed;
     public Stage stage = Stage.ANNOUNCED;
     public long announceAt;
     public double remainingHeight;

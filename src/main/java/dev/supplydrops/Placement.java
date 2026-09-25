@@ -12,9 +12,9 @@ import org.bukkit.block.data.type.Chest;
 public final class Placement {
   private Placement() {}
 
-  public record Site(Pos origin, List<Cell> cells, int fallDistance, String error) {
+  public record Site(Pos origin, List<Cell> cells, String error) {
     static Site rejected(String error) {
-      return new Site(null, List.of(), 0, error);
+      return new Site(null, List.of(), error);
     }
 
     public boolean valid() {
@@ -100,8 +100,8 @@ public final class Placement {
       long key = columnKey(x, z);
       if (!surface.containsKey(key)) {
         int y = world.getHighestBlockYAt(x, z, HeightMap.MOTION_BLOCKING) + 1;
-        if (y <= world.getMinHeight() || y >= world.getMaxHeight() - 1)
-          return Site.rejected("Insufficient sky clearance");
+        if (y <= world.getMinHeight() || y >= world.getMaxHeight())
+          return Site.rejected("Pile exceeds build height");
         if (!natural(world.getBlockAt(x, y - 1, z)))
           return Site.rejected("Requires dry solid ground");
         surface.put(key, y);
@@ -125,7 +125,7 @@ public final class Placement {
       adjusted.add(copy);
       highest = Math.max(highest, origin.y() + next.y());
     }
-    if (highest >= world.getMaxHeight() - 1) return Site.rejected("Insufficient sky clearance");
+    if (highest >= world.getMaxHeight()) return Site.rejected("Pile exceeds build height");
     if (!connected(planned)) return Site.rejected("Slope disconnects the pile");
     for (Cell c : adjusted) {
       Block target =
@@ -134,12 +134,14 @@ public final class Placement {
       if (!planned.contains(c.pos.add(0, -1, 0)) && !natural(target.getRelative(BlockFace.DOWN)))
         return Site.rejected("Requires dry solid ground");
       if (Loot.needsClearTop(Bukkit.createBlockData(c.blockData).getMaterial().name())) {
+        if (target.getY() + 1 >= world.getMaxHeight())
+          return Site.rejected("Container opening exceeds build height");
         Block above = target.getRelative(BlockFace.UP);
         if (!planned.contains(c.pos.add(0, 1, 0)) && !soft(above))
           return Site.rejected("Container opening is obstructed");
       }
     }
-    return new Site(origin, adjusted, world.getMaxHeight() - 1 - highest, null);
+    return new Site(origin, adjusted, null);
   }
 
   public static boolean connected(Set<Pos> cells) {
