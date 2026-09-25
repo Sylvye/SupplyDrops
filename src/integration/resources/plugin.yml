@@ -1,0 +1,25 @@
+name: SupplyDrops
+version: 1.0.0
+main: dev.supplydrops.IntegrationPlugin
+api-version: '26.2'
+description: In-game configured supply drop events
+commands:
+  supplydrops:
+    aliases: [sd]
+    description: SupplyDrops dashboard and event controls
+    usage: /sd [edit|spawn|events|inspect|cancel|unlock|retry]
+permissions:
+  supplydrops.admin:
+    default: op
+    children:
+      supplydrops.edit: true
+      supplydrops.spawn: true
+      supplydrops.manage: true
+  supplydrops.edit:
+    default: op
+  supplydrops.spawn:
+    default: op
+  supplydrops.manage:
+    default: op
+  supplydrops.view:
+    default: true
