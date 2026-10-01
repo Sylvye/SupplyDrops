@@ -1,19 +1,28 @@
-# Verification — 2026-09-25
+# Verification — 2026-09-30
 
-Environment: Java 25.0.4.1, Paper 26.2 build 129, macOS arm64.
+Environment: Windows, Temurin Java 25.0.4.1, Paper 26.2 build 121. Compilation targets Paper API 26.2 build 129.
 
-- Production JAR compilation and packaging: PASS; includes barrel animation and excludes the integration harness.
+- Production JAR compilation and packaging: PASS; bundles SQLite and excludes both integration harness classes.
 - JUnit: 15 tests passed; 0 failures or skips.
-- Paper integration: all 14 phases passed across actual server restarts.
+- Paper integration: all 14 phases passed across actual server restarts. The editor/guardian phase passed 109 assertions.
+- Git whitespace checks: PASS.
 
-New coverage: linear interpolation segments, final-segment completion before landing, relative launch coordinates and ETA, one upright closed barrel with ground-level tracking, four-block scale, disabled frustum culling, increased view range, missing-display replacement, legacy and duplicate entity cleanup, low/high terrain landings, retained barrel during obstruction pauses, and display removal after landing or cancellation. Global speed migration preserves custom values and active snapshots.
+## Editor repair
 
-Guardian checks cover unarmed unattended drops, the independent 25% threshold, the exact three-dimensional 32-block activation boundary, Survival/Adventure eligibility, Creative/Spectator exclusion, retained activation after players leave, timer progression across restart without players, and glowing replacement guardians. Unit persistence checks include the activation timestamp and reveal flag.
+The shared weighted button previously required non-null item lore. Paper returns null for absent lore, so block-entry, item-entry, and guardian-encounter editors threw before opening. Weighted buttons now start with an empty list when needed and retain existing descriptions and weight/chance formatting.
 
-Regression coverage includes all 23 container types, custom items, capacity, weighted generation, terrain and slope checks, SQLite snapshots, stale saves, GUI draft warnings, long descents, announcement/descent/partial-placement/combat/unlocked recovery, guardian customization and confinement, extraction/explosion protection, empty encounters, cancellation, and obstruction retries.
+New integration coverage uses real Paper items, inventories, and native dialog callbacks with a synthetic player. It navigates all three affected editor paths; applies weights, numeric fields, guardian names and booleans; copies custom items without consuming or changing the source; preserves invalid numeric/name submissions for retry; cancels input and confirmation dialogs; rejects stale, duplicate, unauthorized, wrong-player, and offline responses; prevents invalid creation from leaving phantom entries; and verifies SQLite persistence plus editor reopening after saving.
 
-Client visual verification was not completed: the UI tool could not access the running Minecraft game window. Server tests verify interpolation metadata and lifecycle behavior, but smoothness and appearance when joining or approaching mid-descent still require a Minecraft client check. Normal client/server view-distance limits apply.
+Injected dialog-display failures verify pending-state cleanup and restoration of the originating menu. Injected save-preparation failures verify that errors cannot be reported as successful saves. Their `Editor action failed: open dialog` and `Could not prepare editor save` stack traces in the phase-8 log are intentional assertions of diagnostic behavior.
 
-Reproduce with the commands in README.md. Detailed logs are in `build/integration-server/`; JUnit HTML is in `build/reports/tests/test/index.html`.
+Existing coverage remains passing: all 23 containers, capacity and weighted generation, stale saves, draft warnings, guardian combat/confinement/glow/replacement, extraction/explosion protection, terrain and slopes, descent and display lifecycle, obstruction retries, and event/loot recovery across restarts.
 
-Production JAR SHA-256: `c43112bc56f367499edb1c0e0833094d1944ccd3b4e94b35c0db6e1b0278bd44`
+## Reproduction and limits
+
+Run the build and isolated integration commands in README.md. The integration runner now selects the Windows or Unix Gradle wrapper automatically. This run used `C:/Documents/TigerMCE-Test-Server/paper.jar` solely as the server executable; generated data and logs remained under `build/integration-server`. No production server or plugin installation was changed.
+
+JUnit HTML: `build/reports/tests/test/index.html`. Paper logs and pass markers: `build/integration-server/`. Native-dialog appearance and actual client interaction were not verified with a Minecraft client; the automated tests exercise server-side construction, callbacks, scheduling, and persistence.
+
+Production artifact: `build/libs/SupplyDrops-1.0.0.jar`.
+
+SHA-256: `e2c7ebdb9d961cedb94d09a19fc3d3f417d61d67712d64623665ae1dd2ded9ff`.

@@ -26,7 +26,7 @@ import org.bukkit.inventory.*;
 public final class Menus implements Listener {
   private final SupplyDropsPlugin plugin;
   private final Map<UUID, Session> sessions = new HashMap<>();
-  private final Set<UUID> pendingDialogs = new HashSet<>();
+  private final Map<UUID, UUID> pendingDialogs = new HashMap<>();
   private boolean closing;
 
   private static final class Session {
@@ -51,6 +51,7 @@ public final class Menus implements Listener {
     Map<Integer, Runnable> actions = new HashMap<>();
     UUID player;
     String permission;
+    String title;
 
     @Override
     public Inventory getInventory() {
@@ -95,7 +96,7 @@ public final class Menus implements Listener {
     ItemStack item = icon(material, name, extra);
     item.editMeta(
         meta -> {
-          List<Component> lore = new ArrayList<>(Objects.requireNonNull(meta.lore()));
+          List<Component> lore = new ArrayList<>(Objects.requireNonNullElse(meta.lore(), List.of()));
           lore.add(
               Component.text("Weight: " + weight, NamedTextColor.GOLD)
                   .decoration(TextDecoration.ITALIC, false));
@@ -159,6 +160,7 @@ public final class Menus implements Listener {
       Player p, String title, List<Button> buttons, int page, Runnable back, boolean edit) {
     View view = new View();
     view.player = p.getUniqueId();
+    view.title = title;
     view.permission = edit ? "supplydrops.edit" : "supplydrops.view";
     view.inventory = Bukkit.createInventory(view, 54, text("SupplyDrops › " + title));
     for (int i = 45; i < 54; i++)
@@ -225,7 +227,7 @@ public final class Menus implements Listener {
       for (EncounterTable t : s.draft.guardians.values())
         if (!t.entries.isEmpty()) Validation.encounters(t, s.draft);
     } catch (Exception e) {
-      message(p, e.getMessage());
+      reportError(p, "validate draft", e);
       return;
     }
     s.saving = true;
@@ -244,7 +246,18 @@ public final class Menus implements Listener {
   }
 
   public static void message(Player p, String message) {
-    p.sendMessage(text("SupplyDrops • " + message));
+    p.sendMessage(text("SupplyDrops • " + Objects.requireNonNullElse(message, "Unable to apply that change")));
+  }
+
+  private void reportError(Player p, String context, Exception error) {
+    String detail = error.getMessage();
+    if (error instanceof IllegalArgumentException && detail != null && !detail.isBlank()) {
+      message(p, error instanceof NumberFormatException ? "Enter a valid number" : detail);
+      return;
+    }
+    plugin.getLogger().log(java.util.logging.Level.SEVERE,
+        "Editor action failed: " + context + " (player " + p.getUniqueId() + ")", error);
+    message(p, "Unable to apply that change. See the server log for details.");
   }
 
   private void dashboard(Player p) {
@@ -301,13 +314,18 @@ public final class Menus implements Listener {
   }
 
   private void rename(Object obj, String value) {
+    validateName(value);
     try {
-      Validation.require(
-          !value.isBlank() && value.length() <= 48, "Name must contain 1–48 characters");
       obj.getClass().getField("name").set(obj, value);
     } catch (ReflectiveOperationException e) {
-      throw new IllegalArgumentException(e);
+      throw new IllegalStateException(e);
     }
+  }
+
+  private void validateName(String value) {
+    Validation.require(
+        value != null && !value.isBlank() && value.length() <= 48,
+        "Name must contain 1–48 characters");
   }
 
   private Material kindIcon(String kind) {
@@ -337,6 +355,7 @@ public final class Menus implements Listener {
                     "Name",
                     "New " + kind,
                     value -> {
+                      validateName(value);
                       String id = UUID.randomUUID().toString().substring(0, 8);
                       Object obj;
                       switch (kind) {
@@ -543,6 +562,7 @@ public final class Menus implements Listener {
                         "Encounter name",
                         "EMPTY",
                         v -> {
+                          validateName(v);
                           Encounter e = new Encounter();
                           e.name = v;
                           t.entries.add(e);
@@ -672,7 +692,7 @@ public final class Menus implements Listener {
                     f.set(obj, !(boolean) f.get(obj));
                     refresh.run();
                   } catch (Exception ex) {
-                    message(p, ex.getMessage());
+                    reportError(p, "toggle " + key, ex);
                   }
                 } else
                   input(
@@ -687,10 +707,11 @@ public final class Menus implements Listener {
                                   : f.getType() == double.class ? Double.parseDouble(v) : v;
                           if (parsed instanceof Double n)
                             Validation.require(Double.isFinite(n), "Enter a finite number");
+                          if (key.equals("name") && obj instanceof Encounter) validateName(v);
                           f.set(obj, parsed);
                           refresh.run();
                         } catch (ReflectiveOperationException ex) {
-                          throw new IllegalArgumentException(ex.getMessage());
+                          throw new IllegalStateException(ex);
                         }
                       },
                       refresh);
@@ -1169,123 +1190,98 @@ public final class Menus implements Listener {
     show(p, "Event › " + Events.shortId(d), list, 0, () -> active(p), false);
   }
 
+  private void showDialog(Player p, Session captured, UUID token, String title,
+      Supplier<Dialog> dialog, Runnable recover) {
+    pendingDialogs.put(p.getUniqueId(), token);
+    try {
+      p.closeInventory();
+      p.showDialog(dialog.get());
+    } catch (Exception error) {
+      pendingDialogs.remove(p.getUniqueId(), token);
+      reportError(p, "open dialog: " + title, error);
+      if (p.isOnline() && sessions.get(p.getUniqueId()) == captured) {
+        try {
+          recover.run();
+        } catch (Exception recoveryError) {
+          reportError(p, "restore menu: " + title, recoveryError);
+        }
+      }
+    }
+  }
+
+  private void handleDialogAction(Player p, Session captured, UUID token, String permission,
+      net.kyori.adventure.audience.Audience audience, String context,
+      Runnable action, Runnable recover) {
+    if (!(audience instanceof Player actor)
+        || !actor.getUniqueId().equals(p.getUniqueId())
+        || !p.isOnline()
+        || sessions.get(p.getUniqueId()) != captured
+        || !token.equals(pendingDialogs.get(p.getUniqueId()))) return;
+    pendingDialogs.remove(p.getUniqueId(), token);
+    if (!p.hasPermission(permission) || (captured != null && captured.saving)) return;
+    try {
+      action.run();
+    } catch (Exception error) {
+      reportError(p, context, error);
+      try {
+        recover.run();
+      } catch (Exception recoveryError) {
+        reportError(p, "recover from " + context, recoveryError);
+      }
+    }
+  }
+
   private void input(
       Player p, String title, String initial, Consumer<String> onSave, Runnable onCancel) {
     Session captured = sessions.get(p.getUniqueId());
-    pendingDialogs.add(p.getUniqueId());
-    p.closeInventory();
-    p.showDialog(
-        Dialog.create(
-            builder ->
-                builder
-                    .empty()
-                    .base(
-                        DialogBase.builder(text(title))
-                            .canCloseWithEscape(false)
-                            .inputs(
-                                List.of(
-                                    DialogInput.text("value", text(title))
-                                        .initial(initial)
-                                        .maxLength(1000)
-                                        .width(300)
-                                        .build()))
-                            .build())
-                    .type(
-                        DialogType.confirmation(
-                            ActionButton.create(
-                                text("Apply to draft"),
-                                Component.text("Save all changes from the menu"),
-                                150,
-                                DialogAction.customClick(
-                                    (view, audience) ->
-                                        plugin.main(
-                                            () -> {
-                                              if (!(audience instanceof Player actor)
-                                                  || !actor.getUniqueId().equals(p.getUniqueId())
-                                                  || !p.hasPermission("supplydrops.edit")
-                                                  || sessions.get(p.getUniqueId()) != captured)
-                                                return;
-                                              try {
-                                                pendingDialogs.remove(p.getUniqueId());
-                                                onSave.accept(
-                                                    Objects.requireNonNullElse(
-                                                        view.getText("value"), ""));
-                                              } catch (Exception e) {
-                                                message(p, e.getMessage());
-                                                input(p, title, initial, onSave, onCancel);
-                                              }
-                                            }),
-                                    ClickCallback.Options.builder().uses(1).build())),
-                            ActionButton.create(
-                                text("Cancel"),
-                                null,
-                                100,
-                                DialogAction.customClick(
-                                    (view, audience) ->
-                                        plugin.main(
-                                            () -> {
-                                              if (audience instanceof Player actor
-                                                  && actor.getUniqueId().equals(p.getUniqueId())) {
-                                                pendingDialogs.remove(p.getUniqueId());
-                                                onCancel.run();
-                                              }
-                                            }),
-                                    ClickCallback.Options.builder().uses(1).build()))))));
+    UUID token = UUID.randomUUID();
+    showDialog(p, captured, token, title,
+        () -> Dialog.create(builder -> builder.empty()
+            .base(DialogBase.builder(text(title)).canCloseWithEscape(false)
+                .inputs(List.of(DialogInput.text("value", text(title))
+                    .initial(initial).maxLength(1000).width(300).build())).build())
+            .type(DialogType.confirmation(
+                ActionButton.create(text("Apply to draft"),
+                    Component.text("Save all changes from the menu"), 150,
+                    DialogAction.customClick((view, audience) -> {
+                      String submitted = Objects.requireNonNullElse(view.getText("value"), "");
+                      plugin.main(() -> handleDialogAction(p, captured, token,
+                          "supplydrops.edit", audience, "apply input: " + title,
+                          () -> onSave.accept(submitted),
+                          () -> input(p, title, submitted, onSave, onCancel)));
+                    }, ClickCallback.Options.builder().uses(1).build())),
+                ActionButton.create(text("Cancel"), null, 100,
+                    DialogAction.customClick((view, audience) ->
+                        plugin.main(() -> handleDialogAction(p, captured, token,
+                            "supplydrops.edit", audience, "cancel input: " + title,
+                            onCancel, () -> {})),
+                        ClickCallback.Options.builder().uses(1).build()))))),
+        onCancel);
   }
 
   private void confirm(Player p, String title, Runnable yes, Runnable no) {
     Session captured = sessions.get(p.getUniqueId());
-    pendingDialogs.add(p.getUniqueId());
-    p.closeInventory();
-    p.showDialog(
-        Dialog.create(
-            builder ->
-                builder
-                    .empty()
-                    .base(DialogBase.builder(text(title)).canCloseWithEscape(false).build())
-                    .type(
-                        DialogType.confirmation(
-                            ActionButton.create(
-                                text("Confirm"),
-                                null,
-                                100,
-                                DialogAction.customClick(
-                                    (v, a) ->
-                                        plugin.main(
-                                            () -> {
-                                              if (!(a instanceof Player actor)
-                                                  || !actor.getUniqueId().equals(p.getUniqueId())
-                                                  || sessions.get(p.getUniqueId()) != captured)
-                                                return;
-                                              if (!p.hasPermission("supplydrops.edit")
-                                                  && !p.hasPermission("supplydrops.manage")) return;
-                                              try {
-                                                pendingDialogs.remove(p.getUniqueId());
-                                                yes.run();
-                                              } catch (Exception e) {
-                                                message(p, e.getMessage());
-                                                {
-                                                  pendingDialogs.remove(p.getUniqueId());
-                                                  no.run();
-                                                }
-                                              }
-                                            }),
-                                    ClickCallback.Options.builder().uses(1).build())),
-                            ActionButton.create(
-                                text("Cancel"),
-                                null,
-                                100,
-                                DialogAction.customClick(
-                                    (v, a) ->
-                                        plugin.main(
-                                            () -> {
-                                              if (a instanceof Player actor
-                                                  && actor.getUniqueId().equals(p.getUniqueId())) {
-                                                pendingDialogs.remove(p.getUniqueId());
-                                                no.run();
-                                              }
-                                            }),
-                                    ClickCallback.Options.builder().uses(1).build()))))));
+    UUID token = UUID.randomUUID();
+    String permission =
+        p.getOpenInventory().getTopInventory().getHolder() instanceof View v
+            && v.permission.equals("supplydrops.edit")
+            ? "supplydrops.edit" : "supplydrops.manage";
+    showDialog(p, captured, token, title,
+        () -> Dialog.create(builder -> builder.empty()
+            .base(DialogBase.builder(text(title)).canCloseWithEscape(false).build())
+            .type(DialogType.confirmation(
+                ActionButton.create(text("Confirm"), null, 100,
+                    DialogAction.customClick((view, audience) ->
+                        plugin.main(() -> handleDialogAction(p, captured, token,
+                            permission, audience, "confirm: " + title, yes, no)),
+                        ClickCallback.Options.builder().uses(1).build())),
+                ActionButton.create(text("Cancel"), null, 100,
+                    DialogAction.customClick((view, audience) ->
+                        plugin.main(() -> handleDialogAction(p, captured, token,
+                            permission, audience, "cancel confirmation: " + title,
+                            no, () -> {})),
+                        ClickCallback.Options.builder().uses(1).build()))))),
+        no);
   }
 
   @EventHandler
@@ -1306,7 +1302,7 @@ public final class Menus implements Listener {
             try {
               action.run();
             } catch (Exception ex) {
-              message(p, ex.getMessage() == null ? "Unable to apply that change" : ex.getMessage());
+              reportError(p, "menu " + v.title + ", slot " + e.getRawSlot(), ex);
             }
           });
   }
@@ -1329,7 +1325,7 @@ public final class Menus implements Listener {
             plugin,
             () -> {
               if (!player.isOnline()
-                  || pendingDialogs.contains(id)
+                  || pendingDialogs.containsKey(id)
                   || sessions.get(id) != current
                   || current.saving) return;
               if (player.getOpenInventory().getTopInventory().getHolder() instanceof View) return;

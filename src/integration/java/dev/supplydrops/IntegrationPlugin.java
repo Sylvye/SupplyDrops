@@ -236,7 +236,7 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
         check(events.active().isEmpty(), "No active events remain");
         pass();
       }
-      case 8 -> adminAndGuardians();
+      case 8 -> new EditorIntegration(this).run(this::adminAndGuardians);
       case 9 -> failurePaths();
       case 10 -> terrainAndGlow();
       case 11 -> guiCloseWarnings();

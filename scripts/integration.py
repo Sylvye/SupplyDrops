@@ -14,7 +14,8 @@ if not paper or not Path(paper).is_file():
     sys.exit("Set PAPER_JAR to a Paper 26.2 server JAR and JAVA_HOME to Java 25.")
 if os.environ.get("EULA") != "true":
     sys.exit("Set EULA=true after accepting https://aka.ms/MinecraftEULA for this local test server.")
-subprocess.run([str(root / "gradlew"), "test", "integrationJar"], cwd=root, check=True)
+wrapper = root / ("gradlew.bat" if os.name == "nt" else "gradlew")
+subprocess.run([str(wrapper), "test", "integrationJar"], cwd=root, check=True)
 run = root / "build/integration-server"
 if run.exists():
     shutil.rmtree(run)

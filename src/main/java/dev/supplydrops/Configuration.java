@@ -32,13 +32,19 @@ public final class Configuration {
       done.accept("Another admin saved changes. Reopen the editor.");
       return;
     }
+    Config snapshot;
     try {
       Validation.config(draft);
+      snapshot = Store.copy(draft, Config.class);
     } catch (Exception e) {
-      done.accept(e.getMessage());
+      if (e instanceof IllegalArgumentException && e.getMessage() != null
+          && !e.getMessage().isBlank()) done.accept(e.getMessage());
+      else {
+        plugin.getLogger().log(java.util.logging.Level.SEVERE, "Could not prepare editor save", e);
+        done.accept("Unable to save changes. See the server log for details.");
+      }
       return;
     }
-    Config snapshot = Store.copy(draft, Config.class);
     saving = true;
     plugin
         .store
