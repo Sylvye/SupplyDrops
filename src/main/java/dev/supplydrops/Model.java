@@ -28,7 +28,7 @@ public final class Model {
   }
 
   public static class Profile {
-    public String name = "New profile", blockTable = "Example", guardianTable = "Example";
+    public String name = "New_profile", blockTable = "Example", guardianTable = "Example";
     public List<String> worlds = new ArrayList<>();
     public Map<String, String> containers = new LinkedHashMap<>();
     public int radius = 1000, minRolls = 20, maxRolls = 40, delaySeconds = 60, height = 80;
@@ -42,7 +42,7 @@ public final class Model {
   }
 
   public static class BlockTable {
-    public String name = "New block table";
+    public String name = "New_block_table";
     public List<BlockEntry> entries = new ArrayList<>();
   }
 
@@ -57,7 +57,7 @@ public final class Model {
   }
 
   public static class ItemTable {
-    public String name = "New item table";
+    public String name = "New_item_table";
     public int minRolls = 3, maxRolls = 8;
     public List<ItemEntry> entries = new ArrayList<>();
   }
@@ -73,7 +73,7 @@ public final class Model {
   }
 
   public static class EncounterTable {
-    public String name = "New guardian table";
+    public String name = "New_guardian_table";
     public List<Encounter> entries = new ArrayList<>();
   }
 
@@ -86,8 +86,10 @@ public final class Model {
   public static class MobSpec {
     public String type = "HUSK", name = "";
     public int count = 1;
-    public double health = 0, radius = 24;
-    public boolean vanillaDrops;
+    public double health = 0; // Legacy input; migrated to the max_health attribute on load.
+    public double radius = 24;
+    public Map<String, Double> attributes = new LinkedHashMap<>();
+    public boolean vanillaDrops, damageImmune;
     public Map<String, String> equipment = new LinkedHashMap<>();
     public List<Effect> effects = new ArrayList<>();
     public String dropTable = "";

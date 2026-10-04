@@ -1,11 +1,33 @@
-# Verification — 2026-09-30
+# Verification — 2026-10-02
 
 Environment: Windows, Temurin Java 25.0.4.1, Paper 26.2 build 121. Compilation targets Paper API 26.2 build 129.
 
-- Production JAR compilation and packaging: PASS; bundles SQLite and excludes both integration harness classes.
-- JUnit: 15 tests passed; 0 failures or skips.
-- Paper integration: all 14 phases passed across actual server restarts. The editor/guardian phase passed 109 assertions.
+- Production JAR compilation and packaging: PASS; bundles SQLite and excludes integration harness classes.
+- JUnit: 23 tests passed; 0 failures or skips.
+- Paper integration: all 14 phases passed across actual server restarts. The editor/guardian phase passed 368 assertions.
 - Git whitespace checks: PASS.
+
+## Unavailable world references
+
+Saving validates profile settings independently of whether its selected worlds are currently loaded. Enabled profiles with missing, invalid, or empty world selections can be saved, including while another profile is being edited. Spawn and profile-readiness validation require at least one available selected world; random spawning uses only those worlds. Existing unavailable references remain visible and removable in the Worlds editor.
+
+Paper regression checks save enabled stale-world and empty-world profiles, verify their settings survive SQLite save and editor reopen, reject spawning either without creating an event, exclude missing/null/blank references from spawn candidates, remove `paper_26_2_123456789` through the menu, select `world`, and save that repair while other profiles still contain unavailable worlds.
+
+## Guardian attributes and withers
+
+The attribute editor searches only attributes present in the selected mob type's default attribute set. It shows mob-specific defaults, supports base-value edits and reset, rejects non-finite values and invalid Max health, and retains invalid submissions for retry. Paper checks verify search, cancellation without creating an override, save, and reopen. Configuration validation rejects unknown and unsupported attributes even when profiles are disabled.
+
+Schema version 3 converts legacy positive Health into Max health overrides, preserves explicit overrides, and keeps vanilla defaults for zero. Unit tests cover migration idempotence, the schema-2 upgrade, snapshot isolation, and SQLite reopen. Runtime conversion occurs before world availability checks. Paper verifies native effective-value clamping, potion modifiers, fractional Max health and remaining health, default attributes, replacement health limits, and persisted attributes on an existing guardian after restart.
+
+Withers are selectable and valid guardians; the Ender Dragon remains excluded. Real Paper withers charge, heal to the configured maximum, retain damaged health and attributes on replacement, inherit glow, remain confined, and produce vanilla/custom drops. Direct block changes and both wither/skull explosion events preserve locked pile protection while permitting surrounding terrain damage. A live wither survives the phase-8/phase-9 server restart with its attributes, damaged health, glow, and completed charge intact; forced unlock removes it. The tests make nearby attribute fixtures immune so the normal charge explosion does not kill them before assertions complete.
+
+## Menu icons, resource names, and group immunity
+
+Equipment menus display cloned assigned items with their original appearance and metadata, or representative slot icons when unassigned. Paper checks verify copy and clear actions, preserved source quantities and lore, and display-only slot descriptions. Mob catalogs, filtered results, and existing groups use spawn eggs, with a fallback for types without an egg.
+
+Resource lists and assignments display names. Spawn completion supplies profile names; integration checks exercise case-insensitive name commands and legacy IDs with explicit coordinates. Unit tests verify restricted characters, duplicate rejection, name-over-ID precedence, deterministic upgrade normalization, collision suffixes, unchanged reference keys, and migration idempotence. Internal IDs remain stable; active-event displays include the snapshot profile name and event ID.
+
+Damage immunity defaults OFF, including legacy configurations and event snapshots. Editor checks verify toggle, save, and reopen behavior. The guardian phase uses mixed ON/OFF groups and verifies fire, fall, drowning, explosions, hostile melee/projectiles, player melee/projectiles, and owned-pet attacks. An actual environmental death defeats an OFF guardian. Both immunity values survive SQLite reopen and all subsequent Paper restarts.
 
 ## Editor repair
 
@@ -25,4 +47,4 @@ JUnit HTML: `build/reports/tests/test/index.html`. Paper logs and pass markers: 
 
 Production artifact: `build/libs/SupplyDrops-1.0.0.jar`.
 
-SHA-256: `e2c7ebdb9d961cedb94d09a19fc3d3f417d61d67712d64623665ae1dd2ded9ff`.
+SHA-256: `a17c26099834012c539d00cfc001d5343d1471948d662e44830c14562d59ce1a`.

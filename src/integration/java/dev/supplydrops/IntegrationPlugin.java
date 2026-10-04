@@ -82,6 +82,13 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
       baseline();
       return;
     }
+    Drop immunitySnapshot = events.data.drops.values().stream()
+        .filter(v -> "immunity-snapshot".equals(v.profileId)).findFirst().orElseThrow();
+    check(immunitySnapshot.guardians.getFirst().spec.damageImmune, "ON immunity survives server restart");
+    check(!immunitySnapshot.guardians.getLast().spec.damageImmune, "OFF immunity survives server restart");
+    check(immunitySnapshot.guardians.getLast().spec.type.equals("WITHER")
+        && immunitySnapshot.guardians.getLast().spec.attributes.get(GuardianAttributes.MAX_HEALTH) == 90,
+        "Wither attribute snapshot survives server restart");
     Drop d =
         events.data.drops.values().stream()
             .filter(v -> v.profileId.equals("restart"))
@@ -123,6 +130,8 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
               check(!d.guardians.getFirst().defeated, "Guardian encounter restored");
               Entity mob = Bukkit.getEntity(UUID.fromString(d.guardians.getFirst().entityId));
               check(mob != null, "Guardian spawned");
+              check(((LivingEntity) mob).getAttribute(org.bukkit.attribute.Attribute.MOVEMENT_SPEED).getBaseValue() == .27,
+                  "Restarted event spawns with saved attribute override");
               mob.remove();
               later(
                   10,
@@ -141,6 +150,8 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
         var guardian = d.guardians.getFirst();
         LivingEntity mob = (LivingEntity) Bukkit.getEntity(UUID.fromString(guardian.entityId));
         check(mob != null, "Recovered guardian identity");
+        check(mob.getAttribute(org.bukkit.attribute.Attribute.MOVEMENT_SPEED).getBaseValue() == .27,
+            "Existing guardian retains attributes after server restart");
         events.died(mob, new ArrayList<>());
         mob.remove();
         await(
@@ -236,8 +247,8 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
         check(events.active().isEmpty(), "No active events remain");
         pass();
       }
-      case 8 -> new EditorIntegration(this).run(this::adminAndGuardians);
-      case 9 -> failurePaths();
+      case 8 -> new EditorIntegration(this).run(() -> guard(() -> new GuardianIntegration(this).run(this::adminAndGuardians)));
+      case 9 -> GuardianIntegration.verifyRestart(this, this::failurePaths);
       case 10 -> terrainAndGlow();
       case 11 -> guiCloseWarnings();
       case 12 -> barrelAndActivation();
@@ -309,6 +320,7 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
     g.spec = new MobSpec();
     g.spec.type = "HUSK";
     g.spec.health = 40;
+    g.spec.attributes.put("minecraft:movement_speed", .27);
     d.guardians.add(g);
     for (Cell cell : d.cells)
       check(
@@ -320,6 +332,23 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
         "Obstructed site rejected");
     world.getBlockAt(0, 91, 0).setType(Material.AIR);
     events.data.drops.put(d.id, d);
+    Drop immunitySnapshot = new Drop();
+    immunitySnapshot.profileId = "immunity-snapshot";
+    immunitySnapshot.profile = new Profile();
+    immunitySnapshot.world = world.getName();
+    immunitySnapshot.origin = new Pos(0, 90, 0);
+    immunitySnapshot.stage = Stage.UNLOCKED;
+    for (boolean immune : List.of(true, false)) {
+      Model.Guardian snapshot = new Model.Guardian();
+      snapshot.spec = new MobSpec();
+      snapshot.spec.damageImmune = immune;
+      if (!immune) {
+        snapshot.spec.type = "WITHER";
+        snapshot.spec.attributes.put(GuardianAttributes.MAX_HEALTH, 90.0);
+      }
+      immunitySnapshot.guardians.add(snapshot);
+    }
+    events.data.drops.put(immunitySnapshot.id, immunitySnapshot);
     world.save();
     store.save("runtime", events.data).join();
     // Optimistic editor conflict: a stale snapshot must not overwrite a newer save.
@@ -392,6 +421,7 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
     c.guardians.put("empty", t);
     p.guardianTable = "empty";
     c.profiles.put("empty", p);
+    p.name = "Empty_drop";
     events.spawn(
         "empty",
         new Location(world, -15, 90, -15),
@@ -573,7 +603,8 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
       var g = new Model.Guardian();
       g.spec = new MobSpec();
       g.spec.type = type;
-      g.spec.health = 40;
+      g.spec.attributes.put(GuardianAttributes.MAX_HEALTH, 40.0);
+      g.spec.damageImmune = group.guardians.size() % 2 == 0;
       g.spec.radius = 8;
       g.spec.equipment.put("HEAD", Loot.encode(new ItemStack(Material.DIAMOND_HELMET)));
       var effect = new Model.Effect();
@@ -593,8 +624,15 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
                 mob.hasPotionEffect(org.bukkit.potion.PotionEffectType.SPEED),
                 "Custom effect applied");
             mob.damage(5);
-            check(mob.getHealth() == 40, "Environmental damage blocked");
+            check(g.spec.damageImmune ? mob.getHealth() == 40 : mob.getHealth() < 40,
+                "Environmental damage respects group immunity: " + g.spec.type);
+            verifyDamageImmunity(mob, g.spec.damageImmune);
           }
+          Model.Guardian vulnerable = group.guardians.get(1);
+          LivingEntity vulnerableMob = (LivingEntity) Bukkit.getEntity(UUID.fromString(vulnerable.entityId));
+          vulnerableMob.setNoDamageTicks(0);
+          vulnerableMob.damage(1000);
+          check(vulnerable.defeated, "Environmental death defeats vulnerable guardian");
           var first = group.guardians.getFirst();
           Entity mob = Bukkit.getEntity(UUID.fromString(first.entityId));
           mob.teleport(new Location(world, 20, 90, 20));
@@ -606,6 +644,49 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
                 later(5, this::pass);
               });
         });
+  }
+
+  private void verifyDamageImmunity(LivingEntity mob, boolean immune) {
+    for (EntityDamageEvent.DamageCause cause : List.of(EntityDamageEvent.DamageCause.FIRE,
+        EntityDamageEvent.DamageCause.FALL, EntityDamageEvent.DamageCause.DROWNING,
+        EntityDamageEvent.DamageCause.BLOCK_EXPLOSION, EntityDamageEvent.DamageCause.ENTITY_EXPLOSION)) {
+      EntityDamageEvent damage = new EntityDamageEvent(mob, cause,
+          org.bukkit.damage.DamageSource.builder(org.bukkit.damage.DamageType.GENERIC).build(), 1);
+      Bukkit.getPluginManager().callEvent(damage);
+      check(damage.isCancelled() == immune, "Group immunity for " + cause);
+    }
+    Player player = (Player) java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),
+        new Class<?>[] {Player.class}, (p, method, args) -> switch (method.getName()) {
+          case "getUniqueId" -> UUID.fromString("00000000-0000-0000-0000-000000000123");
+          case "getWorld" -> world;
+          default -> null;
+        });
+    var shooter = new java.util.concurrent.atomic.AtomicReference<org.bukkit.projectiles.ProjectileSource>(player);
+    Arrow arrow = (Arrow) java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),
+        new Class<?>[] {Arrow.class}, (p, method, args) -> switch (method.getName()) {
+          case "getShooter" -> shooter.get();
+          case "getWorld" -> world;
+          default -> null;
+        });
+    Wolf pet = world.spawn(mob.getLocation().add(0, 3, 0), Wolf.class);
+    pet.setOwner(Bukkit.getOfflinePlayer(player.getUniqueId()));
+    Husk hostile = world.spawn(mob.getLocation().add(0, 3, 0), Husk.class);
+    for (Entity attacker : List.of(player, arrow, pet, hostile)) {
+      EntityDamageByEntityEvent damage = new EntityDamageByEntityEvent(attacker, mob,
+          attacker == arrow ? EntityDamageEvent.DamageCause.PROJECTILE : EntityDamageEvent.DamageCause.ENTITY_ATTACK,
+          org.bukkit.damage.DamageSource.builder(org.bukkit.damage.DamageType.GENERIC).build(), 1);
+      Bukkit.getPluginManager().callEvent(damage);
+      check(damage.isCancelled() == (attacker == hostile && immune),
+          "Combat immunity for " + attacker.getClass().getSimpleName());
+    }
+    shooter.set(hostile);
+    EntityDamageByEntityEvent hostileProjectile = new EntityDamageByEntityEvent(arrow, mob,
+        EntityDamageEvent.DamageCause.PROJECTILE,
+        org.bukkit.damage.DamageSource.builder(org.bukkit.damage.DamageType.GENERIC).build(), 1);
+    Bukkit.getPluginManager().callEvent(hostileProjectile);
+    check(hostileProjectile.isCancelled() == immune, "Non-player projectile immunity");
+    pet.remove();
+    hostile.remove();
   }
 
   void failurePaths() {
@@ -662,8 +743,10 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
                 world.getWorldBorder().setSize(size);
                 Profile missing = Store.copy(config.current.profiles.get("Example"), Profile.class);
                 missing.worlds = List.of("absent-test-world");
+                Validation.profile(missing, config.current);
+                check(true, "Unavailable worlds do not invalidate saved profile settings");
                 try {
-                  Validation.profile(missing, config.current);
+                  Validation.spawnProfile(missing, config.current);
                   throw new AssertionError("Missing world accepted");
                 } catch (IllegalArgumentException expected) {
                   assertions++;
@@ -812,6 +895,7 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
     c.settings = new Settings();
     c.settings.delaySeconds = 0;
     Profile profile = Store.copy(c.profiles.get("Example"), Profile.class);
+    profile.name = "Barrel_test";
     profile.enabled = true;
     profile.minRolls = profile.maxRolls = 1;
     BlockTable blocks = new BlockTable();
@@ -819,6 +903,7 @@ public final class IntegrationPlugin extends SupplyDropsPlugin {
     c.blocks.put("barrel-test", blocks);
     profile.blockTable = "barrel-test";
     EncounterTable guardians = new EncounterTable();
+    guardians.name = "Barrel_encounters";
     Encounter encounter = new Encounter();
     MobSpec spec = new MobSpec();
     spec.type = "HUSK";

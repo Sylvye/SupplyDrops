@@ -323,9 +323,7 @@ public final class Menus implements Listener {
   }
 
   private void validateName(String value) {
-    Validation.require(
-        value != null && !value.isBlank() && value.length() <= 48,
-        "Name must contain 1–48 characters");
+    ResourceNames.validate(value);
   }
 
   private Material kindIcon(String kind) {
@@ -344,7 +342,7 @@ public final class Menus implements Listener {
         .forEach(
             (id, obj) ->
                 list.add(
-                    button(kindIcon(kind), name(obj), () -> detail(p, kind, id), "ID: " + id)));
+                    button(kindIcon(kind), name(obj), () -> detail(p, kind, id))));
     list.add(
         button(
             Material.LIME_DYE,
@@ -353,9 +351,9 @@ public final class Menus implements Listener {
                 input(
                     p,
                     "Name",
-                    "New " + kind,
+                    "New_" + kind,
                     value -> {
-                      validateName(value);
+                      ResourceNames.available(map(s.draft, kind), null, value);
                       String id = UUID.randomUUID().toString().substring(0, 8);
                       Object obj;
                       switch (kind) {
@@ -406,6 +404,7 @@ public final class Menus implements Listener {
                     "Display name",
                     name(obj),
                     v -> {
+                      ResourceNames.available(map(session(p).draft, kind), id, v);
                       rename(obj, v);
                       refresh.run();
                     },
@@ -418,7 +417,7 @@ public final class Menus implements Listener {
                 input(
                     p,
                     "Copy name",
-                    name(obj) + " copy",
+                    ResourceNames.normalize(name(obj).substring(0, Math.min(name(obj).length(), 43)) + "_copy"),
                     v -> {
                       duplicate(p, kind, id, v);
                       listing(p, kind);
@@ -577,6 +576,7 @@ public final class Menus implements Listener {
   @SuppressWarnings({"rawtypes", "unchecked"})
   private void duplicate(Player p, String kind, String id, String name) {
     Map map = map(session(p).draft, kind);
+    ResourceNames.available(map, null, name);
     Object old = map.get(id), copy = Store.JSON.fromJson(Store.JSON.toJson(old), old.getClass());
     rename(copy, name);
     if (copy instanceof Profile profile) {
@@ -618,7 +618,7 @@ public final class Menus implements Listener {
     list.add(
         button(
             Material.GOLD_BLOCK,
-            "Block table • " + profile.blockTable,
+            "Block table • " + ResourceNames.display(session(p).draft.blocks, profile.blockTable),
             () ->
                 choose(
                     p,
@@ -631,7 +631,7 @@ public final class Menus implements Listener {
     list.add(
         button(
             Material.IRON_SWORD,
-            "Guardian table • " + profile.guardianTable,
+            "Guardian table • " + ResourceNames.display(session(p).draft.guardians, profile.guardianTable),
             () ->
                 choose(
                     p,
@@ -647,7 +647,7 @@ public final class Menus implements Listener {
             Material.EMERALD,
             "Validate profile",
             () -> {
-              Validation.profile(profile, session(p).draft);
+              Validation.spawnProfile(profile, session(p).draft);
               message(p, "Profile is valid.");
             }));
     if (p.hasPermission("supplydrops.spawn"))
@@ -733,7 +733,7 @@ public final class Menus implements Listener {
                 worlds(p, profile, back);
               }));
     for (String missing : new ArrayList<>(profile.worlds))
-      if (Bukkit.getWorld(missing) == null)
+      if (missing == null || missing.isBlank() || Bukkit.getWorld(missing) == null)
         list.add(
             button(
                 Material.BARRIER,
@@ -761,7 +761,7 @@ public final class Menus implements Listener {
                         mappings(p, profile, back);
                       },
                       () -> mappings(p, profile, back)),
-              "Table: " + profile.containers.getOrDefault(type, "Unassigned")));
+              "Table: " + ResourceNames.display(session(p).draft.items, profile.containers.get(type))));
     show(p, "Profile › Containers", list, 0, back, true);
   }
 
@@ -770,7 +770,7 @@ public final class Menus implements Listener {
     map(session(p).draft, kind)
         .forEach(
             (id, t) ->
-                list.add(button(kindIcon(kind), name(t), () -> selected.accept(id), "ID: " + id)));
+                list.add(button(kindIcon(kind), name(t), () -> selected.accept(id))));
     show(p, "Choose " + kind, list, 0, back, true);
   }
 
@@ -841,7 +841,7 @@ public final class Menus implements Listener {
     field(p, list, e, "name", "Name", refresh);
     weightField(p, list, e, t.entries, v -> v.weight, refresh);
     for (MobSpec m : e.mobs)
-      list.add(button(Material.ZOMBIE_HEAD, m.type + " × " + m.count, () -> mob(p, e, m, refresh)));
+      list.add(button(mobIcon(m.type), m.type + " × " + m.count, () -> mob(p, e, m, refresh)));
     list.add(
         button(
             Material.LIME_DYE,
@@ -851,11 +851,7 @@ public final class Menus implements Listener {
                     p,
                     "Mob type",
                     Arrays.stream(EntityType.values())
-                        .filter(EntityType::isSpawnable)
-                        .filter(
-                            type ->
-                                type.getEntityClass() != null
-                                    && Mob.class.isAssignableFrom(type.getEntityClass()))
+                        .filter(Validation::guardianType)
                         .map(Enum::name)
                         .toList(),
                     v -> {
@@ -879,14 +875,22 @@ public final class Menus implements Listener {
   private void mob(Player p, Encounter e, MobSpec m, Runnable back) {
     List<Button> list = new ArrayList<>();
     Runnable refresh = () -> mob(p, e, m, back);
-    for (String f : List.of("name", "count", "health", "radius", "vanillaDrops"))
-      field(p, list, m, f, label(f) + (f.equals("health") ? " (0 = vanilla)" : ""), refresh);
+    for (String f : List.of("name", "count", "radius", "vanillaDrops"))
+      field(p, list, m, f, label(f), refresh);
+    list.add(button(Material.COMPARATOR, "Attributes", () -> attributes(p, m, refresh),
+        "Override supported base attributes", "Equipment and potion modifiers still apply"));
+    list.add(button(m.damageImmune ? Material.LIME_DYE : Material.GRAY_DYE,
+        "Damage immunity • " + (m.damageImmune ? "ON" : "OFF"), () -> {
+          m.damageImmune = !m.damageImmune;
+          refresh.run();
+        }, "Ignores environmental and non-player damage when ON",
+        "Player and owned-pet attacks remain allowed"));
     list.add(button(Material.DIAMOND_CHESTPLATE, "Equipment", () -> equipment(p, m, refresh)));
     list.add(button(Material.POTION, "Potion effects", () -> effects(p, m, refresh)));
     list.add(
         button(
             Material.DIAMOND,
-            "Custom drops • " + m.dropTable,
+            "Custom drops • " + ResourceNames.display(session(p).draft.items, m.dropTable),
             () ->
                 choose(
                     p,
@@ -915,14 +919,47 @@ public final class Menus implements Listener {
     show(p, "Guardian › " + m.type, list, 0, back, true);
   }
 
+  private void attributes(Player p, MobSpec m, Runnable back) {
+    List<Button> list = new ArrayList<>();
+    Runnable refresh = () -> attributes(p, m, back);
+    m.attributes.forEach((key, value) -> list.add(button(Material.COMPARATOR,
+        key + " • " + value, () -> attribute(p, m, key, refresh),
+        "Mob default: " + GuardianAttributes.defaultValue(m, key),
+        "Base value; Minecraft limits the effective value")));
+    list.add(button(Material.LIME_DYE, "Add attribute", () -> catalog(p, "Attribute",
+        GuardianAttributes.supported(m), key -> attribute(p, m, key, refresh), refresh)));
+    show(p, "Guardian › Attributes", list, 0, back, true);
+  }
+
+  private void attribute(Player p, MobSpec m, String key, Runnable back) {
+    List<Button> list = new ArrayList<>();
+    Runnable refresh = () -> attribute(p, m, key, back);
+    double vanilla = GuardianAttributes.defaultValue(m, key);
+    list.add(button(Material.COMPARATOR, "Base value • " + m.attributes.getOrDefault(key, vanilla),
+        () -> input(p, key + " base value", String.valueOf(m.attributes.getOrDefault(key, vanilla)),
+            submitted -> {
+              double value = Double.parseDouble(submitted);
+              GuardianAttributes.validate(m, key, value);
+              m.attributes.put(key, value);
+              refresh.run();
+            }, refresh),
+        "Mob default: " + vanilla,
+        "Minecraft limits the effective value; equipment and effects still apply"));
+    list.add(button(Material.BARRIER, "Reset to default", () -> {
+      m.attributes.remove(key);
+      back.run();
+    }, "Remove this override from the draft"));
+    show(p, "Attribute › " + key, list, 0, back, true);
+  }
+
   private void equipment(Player p, MobSpec m, Runnable back) {
     List<Button> list = new ArrayList<>();
     Runnable refresh = () -> equipment(p, m, back);
     for (EquipmentSlot slot : EquipmentSlot.values()) {
+      ItemStack visual = equipmentIcon(m, slot);
       list.add(
-          button(
-              Material.ARMOR_STAND,
-              slot.name() + " • copy item",
+          new Button(
+              visual,
               () ->
                   pickItem(
                       p,
@@ -930,8 +967,7 @@ public final class Menus implements Listener {
                         m.equipment.put(slot.name(), Loot.encode(item));
                         refresh.run();
                       },
-                      refresh),
-              m.equipment.containsKey(slot.name()) ? "Assigned" : "Vanilla default"));
+                      refresh)));
       if (m.equipment.containsKey(slot.name()))
         list.add(
             button(
@@ -943,6 +979,37 @@ public final class Menus implements Listener {
                 }));
     }
     show(p, "Guardian › Equipment", list, 0, back, true);
+  }
+
+  static Material mobIcon(String type) {
+    Material egg = Material.matchMaterial(type + "_SPAWN_EGG");
+    return egg != null && egg.isItem() ? egg : Material.ZOMBIE_HEAD;
+  }
+
+  private ItemStack equipmentIcon(MobSpec mob, EquipmentSlot slot) {
+    String encoded = mob.equipment.get(slot.name());
+    Material fallback = switch (slot.name()) {
+      case "HEAD" -> Material.IRON_HELMET;
+      case "CHEST" -> Material.IRON_CHESTPLATE;
+      case "LEGS" -> Material.IRON_LEGGINGS;
+      case "FEET" -> Material.IRON_BOOTS;
+      case "HAND" -> Material.IRON_SWORD;
+      case "OFF_HAND" -> Material.SHIELD;
+      case "BODY" -> Material.WOLF_ARMOR;
+      case "SADDLE" -> Material.SADDLE;
+      default -> Material.PAPER;
+    };
+    if (encoded == null) return icon(fallback, slot.name() + " • copy item", "Vanilla default");
+    ItemStack visual = Loot.decode(encoded).clone();
+    if (visual.getType().isAir()) return icon(fallback, slot.name() + " • copy item", "Assigned: Air");
+    visual.setAmount(1);
+    visual.editMeta(meta -> {
+      List<Component> lore = new ArrayList<>(Objects.requireNonNullElse(meta.lore(), List.of()));
+      lore.add(text(slot.name() + " • copy item"));
+      lore.add(text("Assigned"));
+      meta.lore(lore);
+    });
+    return visual;
   }
 
   private void effects(Player p, MobSpec m, Runnable back) {
@@ -1050,7 +1117,7 @@ public final class Menus implements Listener {
                     () -> catalog(p, title, values, selected, back, filter))));
     for (String v : values)
       if (v.toLowerCase(Locale.ROOT).contains(filter.toLowerCase(Locale.ROOT))) {
-        Material material = Material.matchMaterial(v);
+        Material material = title.equals("Mob type") ? mobIcon(v) : Material.matchMaterial(v);
         list.add(
             button(
                 material != null && material.isItem() ? material : Material.PAPER,
@@ -1091,7 +1158,7 @@ public final class Menus implements Listener {
       list.add(
           button(
               Material.CHEST,
-              Events.shortId(d) + " • " + d.stage,
+              Events.label(d) + " • " + d.stage,
               () -> event(p, d),
               Events.coordinates(d),
               d.error));
@@ -1187,7 +1254,7 @@ public final class Menus implements Listener {
                       },
                       () -> event(p, d))));
     }
-    show(p, "Event › " + Events.shortId(d), list, 0, () -> active(p), false);
+    show(p, "Event › " + Events.label(d), list, 0, () -> active(p), false);
   }
 
   private void showDialog(Player p, Session captured, UUID token, String title,

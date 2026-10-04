@@ -39,6 +39,31 @@ class StoreTest {
   }
 
   @Test
+  void immunityDefaultsAndEventSnapshotsSurviveReopen() throws Exception {
+    assertFalse(Store.JSON.fromJson("{}", MobSpec.class).damageImmune);
+    Drop legacy = Store.JSON.fromJson("{\"guardians\":[{\"spec\":{}}]}", Drop.class);
+    assertFalse(legacy.guardians.getFirst().spec.damageImmune);
+    MobSpec source = new MobSpec();
+    source.damageImmune = true;
+    Guardian on = new Guardian();
+    on.spec = Store.copy(source, MobSpec.class);
+    source.damageImmune = false;
+    Guardian off = new Guardian();
+    off.spec = Store.copy(source, MobSpec.class);
+    Drop drop = new Drop();
+    drop.guardians.add(on);
+    drop.guardians.add(off);
+    Path file = temp.resolve("immunity.db");
+    try (Store store = new Store(file)) { store.save("drop", drop).join(); }
+    try (Store store = new Store(file)) {
+      Drop reopened = store.read("drop", Drop.class, null);
+      assertTrue(reopened.guardians.getFirst().spec.damageImmune);
+      assertFalse(reopened.guardians.getLast().spec.damageImmune);
+      assertFalse(source.damageImmune);
+    }
+  }
+
+  @Test
   void copyDoesNotShareMutableTables() {
     Config original = new Config();
     Profile p = new Profile();

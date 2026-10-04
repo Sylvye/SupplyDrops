@@ -80,6 +80,7 @@ final class EditorIntegration {
     draft = (Config) field(session(), "draft");
     steps.add(() -> {
       check(top.get().getSize() == 54, "Dashboard builds");
+      verifyNamesAndCommands();
       check(new ItemStack(Material.STONE).getItemMeta().lore() == null,
           "Paper returns null for absent lore");
       for (ClickType click : List.of(ClickType.LEFT, ClickType.SHIFT_LEFT, ClickType.NUMBER_KEY)) {
@@ -129,6 +130,30 @@ final class EditorIntegration {
     });
     steps.add(() -> {
       check(lore("Weight / chance").size() == 2, "Guardian encounter opens without lore");
+      check(menuItem("RAVAGER ×").getType() == Material.RAVAGER_SPAWN_EGG,
+          "Existing groups use spawn eggs");
+      check(Menus.mobIcon("NO_SUCH_MOB") == Material.ZOMBIE_HEAD, "Mob icon fallback");
+      click("Add mob group");
+    });
+    steps.add(() -> {
+      check(menuItem("CREEPER").getType() == Material.CREEPER_SPAWN_EGG, "Mob catalog uses spawn eggs");
+      click("Search •");
+    });
+    steps.add(() -> respond(apply, "WITHER"));
+    steps.add(() -> {
+      check(menuItem("WITHER").getType() == Material.WITHER_SPAWN_EGG, "Wither available in mob search");
+      click("WITHER");
+    });
+    steps.add(() -> click("WITHER ×"));
+    steps.add(() -> click("Remove mob group"));
+    steps.add(() -> click("Add mob group"));
+    steps.add(() -> click("Search •"));
+    steps.add(() -> respond(apply, "HUSK"));
+    steps.add(() -> {
+      check(menuItem("HUSK").getType() == Material.HUSK_SPAWN_EGG, "Search retains mob icons");
+      EncounterTable table = draft.guardians.get("Example");
+      invoke("encounter", new Class<?>[] {Player.class, EncounterTable.class, Encounter.class, Runnable.class},
+          player, table, table.entries.getFirst(), (Runnable) () -> {});
       click("Weight / chance");
     });
     steps.add(() -> respond(apply, "4"));
@@ -136,16 +161,98 @@ final class EditorIntegration {
       check(draft.guardians.get("Example").entries.getFirst().weight == 4, "Guardian weight applies");
       click("RAVAGER ×");
     });
-    steps.add(() -> click("Health (0 = vanilla) •"));
+    steps.add(() -> click("Attributes"));
+    steps.add(() -> click("Add attribute"));
+    steps.add(() -> {
+      check(GuardianAttributes.supported(draft.guardians.get("Example").entries.getFirst().mobs.getFirst())
+          .stream().noneMatch(key -> key.equals("minecraft:block_break_speed")),
+          "Player-only attributes excluded from ravager picker");
+      click("minecraft:max_health");
+    });
+    steps.add(() -> {
+      check(lore("Base value •").getFirst().toString().contains("100.0"), "Shows ravager-specific health default");
+      click("Base value •");
+    });
+    steps.add(() -> respond(apply, "NaN"));
+    steps.add(() -> {
+      check(initial().equals("NaN"), "Invalid attribute retained for retry");
+      check(draft.guardians.get("Example").entries.getFirst().mobs.getFirst().attributes.isEmpty(),
+          "Invalid input creates no override");
+      respond(apply, "0");
+    });
+    steps.add(() -> {
+      check(initial().equals("0"), "Zero health rejected without changing draft");
+      respond(cancel, "");
+    });
+    steps.add(() -> {
+      check(draft.guardians.get("Example").entries.getFirst().mobs.getFirst().attributes.isEmpty(),
+          "Canceled attribute leaves vanilla default intact");
+      click("Base value •");
+    });
     steps.add(() -> respond(apply, "50.5"));
     steps.add(() -> {
-      check(draft.guardians.get("Example").entries.getFirst().mobs.getFirst().health == 50.5,
+      check(draft.guardians.get("Example").entries.getFirst().mobs.getFirst().attributes
+          .get(GuardianAttributes.MAX_HEALTH) == 50.5,
           "Guardian decimal health applies");
+      click("Reset to default");
+    });
+    steps.add(() -> {
+      check(draft.guardians.get("Example").entries.getFirst().mobs.getFirst().attributes.isEmpty(),
+          "Reset removes attribute override");
+      click("Add attribute");
+    });
+    steps.add(() -> click("minecraft:max_health"));
+    steps.add(() -> click("Base value •"));
+    steps.add(() -> respond(apply, "50.5"));
+    steps.add(() -> click("Back"));
+    steps.add(() -> click("Add attribute"));
+    steps.add(() -> click("Search •"));
+    steps.add(() -> respond(apply, "movement_speed"));
+    steps.add(() -> click("minecraft:movement_speed"));
+    steps.add(() -> click("Base value •"));
+    steps.add(() -> respond(apply, "0.35"));
+    steps.add(() -> click("Back"));
+    steps.add(() -> click("Back"));
+    steps.add(() -> {
       click("Vanilla drops •");
     });
     steps.add(() -> {
       check(draft.guardians.get("Example").entries.getFirst().mobs.getFirst().vanillaDrops,
           "Guardian boolean edit applies");
+      check(menuItem("Damage immunity • OFF").getType() == Material.GRAY_DYE,
+          "Group immunity defaults OFF");
+      click("Damage immunity • OFF");
+    });
+    steps.add(() -> {
+      check(menuItem("Damage immunity • ON").getType() == Material.LIME_DYE, "Immunity toggle applies");
+      click("Equipment");
+    });
+    steps.add(() -> {
+      check(menuItem("HEAD •").getType() == Material.IRON_HELMET, "Unassigned head uses helmet icon");
+      check(menuItem("HAND •").getType() == Material.IRON_SWORD, "Unassigned hand uses sword icon");
+      check(menuItem("OFF_HAND •").getType() == Material.SHIELD, "Off hand uses shield icon");
+      check(menuItem("BODY •").getType() == Material.WOLF_ARMOR, "Body uses armor icon");
+      check(menuItem("SADDLE •").getType() == Material.SADDLE, "Saddle uses saddle icon");
+      click("HEAD •");
+    });
+    steps.add(() -> click("Copied custom diamond"));
+    steps.add(() -> {
+      MobSpec mob = draft.guardians.get("Example").entries.getFirst().mobs.getFirst();
+      ItemStack stored = Loot.decode(mob.equipment.get("HEAD"));
+      ItemStack visual = menuItem("Copied custom diamond");
+      check(visual.getType() == Material.DIAMOND && visual.getAmount() == 1, "Assigned item shown");
+      check(stored.isSimilar(source) && source.getAmount() == 5, "Equipment source metadata retained");
+      check(stored.getItemMeta().lore().equals(source.getItemMeta().lore()), "Menu lore does not alter storage");
+      check(visual.getItemMeta().lore().size() == 3, "Original lore plus slot information shown");
+      click("Clear HEAD");
+    });
+    steps.add(() -> {
+      MobSpec mob = draft.guardians.get("Example").entries.getFirst().mobs.getFirst();
+      check(!mob.equipment.containsKey("HEAD"), "Equipment clear works");
+      check(menuItem("HEAD •").getType() == Material.IRON_HELMET, "Clear restores slot icon");
+      Encounter encounter = draft.guardians.get("Example").entries.getFirst();
+      invoke("mob", new Class<?>[] {Player.class, Encounter.class, MobSpec.class, Runnable.class},
+          player, encounter, mob, (Runnable) () -> {});
       click("Name •");
     });
     steps.add(() -> respond(apply, "Test guardian"));
@@ -240,6 +347,7 @@ final class EditorIntegration {
         check(error != null && error.contains("server log"), "Unexpected save failure cannot report success");
         check(plugin.config.revision == revision, "Failed save keeps current configuration intact");
       });
+      addWorldRegressionProfiles();
       click("Save changes");
     });
     steps.add(() -> plugin.await(() -> plugin.config.revision > revision, () -> {
@@ -250,14 +358,48 @@ final class EditorIntegration {
       check(saved.blocks.get("Example").entries.getFirst().weight == 2.5, "Block edit persisted");
       check(saved.guardians.get("Example").entries.getFirst().mobs.getFirst().name.equals("Test guardian"),
           "Guardian customization persisted");
+      check(saved.guardians.get("Example").entries.getFirst().mobs.getFirst().damageImmune,
+          "Immunity persists through save");
+      check(saved.guardians.get("Example").entries.getFirst().mobs.getFirst().attributes
+          .equals(draft.guardians.get("Example").entries.getFirst().mobs.getFirst().attributes),
+          "Attribute overrides persist through save");
       Config reopened = (Config) field(session(), "draft");
+      check(reopened.guardians.get("Example").entries.getFirst().mobs.getFirst().attributes
+          .equals(saved.guardians.get("Example").entries.getFirst().mobs.getFirst().attributes),
+          "Attribute overrides survive editor reopen");
+      check(reopened.guardians.get("Example").entries.getFirst().mobs.getFirst().damageImmune,
+          "Immunity survives editor reopen");
       check(reopened.items.get("Example").entries.getLast().item.equals(draft.items.get("Example").entries.getLast().item),
           "Copied item survives save and reopen");
-      plugin.config.commit(original, plugin.config.revision, error -> {
-        check(error == null, "Restore integration baseline");
-        sessions().remove(id);
-        pending().remove(id);
-        done.run();
+      check(saved.profiles.get("stale-world-test").worlds.equals(List.of("paper_26_2_123456789")),
+          "Enabled stale-world profile saves without losing references");
+      check(saved.profiles.get("empty-world-test").worlds.isEmpty(), "Enabled profile without worlds saves");
+      check(reopened.profiles.get("stale-world-test").worlds.equals(saved.profiles.get("stale-world-test").worlds),
+          "Unavailable world survives save and reopen for manual repair");
+      verifyUnavailableSpawn("stale-world-test");
+      verifyUnavailableSpawn("empty-world-test");
+      Profile repaired = reopened.profiles.get("stale-world-test");
+      invoke("worlds", new Class<?>[] {Player.class, Profile.class, Runnable.class},
+          player, repaired, (Runnable) () -> {});
+      click("paper_26_2_123456789 (unavailable;");
+      plugin.later(3, () -> {
+        check(repaired.worlds.isEmpty(), "Unavailable world removable in editor");
+        click(plugin.world.getName());
+        plugin.later(3, () -> {
+          check(repaired.worlds.equals(List.of(plugin.world.getName())), "Renamed world can be selected");
+          long repairRevision = plugin.config.revision;
+          click("Save changes");
+          plugin.await(() -> plugin.config.revision > repairRevision, () -> {
+            check(plugin.config.current.profiles.get("stale-world-test").worlds.equals(List.of(plugin.world.getName())),
+                "Repaired world selection saves despite other unavailable profiles");
+            plugin.config.commit(original, plugin.config.revision, error -> {
+              check(error == null, "Restore integration baseline");
+              sessions().remove(id);
+              pending().remove(id);
+              done.run();
+            });
+          }, 100);
+        });
       });
     }, 100));
     next();
@@ -271,6 +413,91 @@ final class EditorIntegration {
 
   private void detail(String kind) {
     invoke("detail", new Class<?>[] {Player.class, String.class, String.class}, player, kind, "Example");
+  }
+
+  private void addWorldRegressionProfiles() {
+    for (String kind : List.of("stale", "mixed", "empty")) {
+      Profile profile = Store.copy(draft.profiles.get("Example"), Profile.class);
+      profile.name = kind + "_world_test";
+      profile.enabled = true;
+      profile.scheduled = false;
+      profile.worlds = new ArrayList<>();
+      if (!kind.equals("empty")) profile.worlds.add("paper_26_2_123456789");
+      if (kind.equals("mixed")) {
+        profile.worlds.add(null);
+        profile.worlds.add("");
+        profile.worlds.add(plugin.world.getName());
+        check(Validation.spawnProfile(profile, draft).equals(List.of(plugin.world)),
+            "Spawn candidates exclude unavailable and invalid world references");
+      }
+      draft.profiles.put(kind + "-world-test", profile);
+    }
+  }
+
+  private void verifyUnavailableSpawn(String id) {
+    int before = plugin.events.data.drops.size();
+    AtomicReference<String> reply = new AtomicReference<>();
+    plugin.events.spawn(id, null, reply::set);
+    check(reply.get() != null && reply.get().contains("No available worlds"),
+        "Unavailable profile gives actionable spawn error: " + id);
+    check(plugin.events.data.drops.size() == before, "Unavailable profile creates no event");
+  }
+
+  private void verifyNamesAndCommands() {
+    Profile profile = draft.profiles.get("Example");
+    invoke("listing", new Class<?>[] {Player.class, String.class}, player, "profiles");
+    check(Objects.requireNonNullElse(menuItem(profile.name).getItemMeta().lore(), List.of()).isEmpty(),
+        "Profile list hides internal IDs");
+    detail("profiles");
+    check(menuItem("Block table • " + draft.blocks.get(profile.blockTable).name) != null,
+        "Profile displays block table name");
+    check(menuItem("Guardian table • " + draft.guardians.get(profile.guardianTable).name) != null,
+        "Profile displays guardian table name");
+    invoke("mappings", new Class<?>[] {Player.class, Profile.class, Runnable.class},
+        player, profile, (Runnable) () -> {});
+    check(PlainTextComponentSerializer.plainText().serialize(lore("CHEST").getFirst())
+        .equals("Table: " + draft.items.get(profile.containers.get("CHEST")).name),
+        "Container table name shown");
+    MobSpec mob = draft.guardians.get("Example").entries.getFirst().mobs.getFirst();
+    String previous = mob.dropTable;
+    mob.dropTable = "Example";
+    invoke("mob", new Class<?>[] {Player.class, Encounter.class, MobSpec.class, Runnable.class},
+        player, draft.guardians.get("Example").entries.getFirst(), mob, (Runnable) () -> {});
+    check(menuItem("Custom drops • " + draft.items.get("Example").name) != null, "Drop table name shown");
+    mob.dropTable = previous;
+    List<String> completions = plugin.onTabComplete(player, plugin.getCommand("supplydrops"), "sd",
+        new String[] {"spawn", ""});
+    check(completions.contains(plugin.config.current.profiles.get("Example").name)
+        && !completions.contains("Example"), "Spawn completion uses names");
+    Profile saved = plugin.config.current.profiles.get("Example");
+    boolean enabled = saved.enabled;
+    saved.enabled = true;
+    for (String argument : List.of(saved.name.toUpperCase(Locale.ROOT), "Example")) {
+      messages.clear();
+      plugin.onCommand(player, plugin.getCommand("supplydrops"), "sd",
+          new String[] {"spawn", argument, plugin.world.getName(), "999999", "90", "999999"});
+      check(messages.stream().anyMatch(s -> s.contains("No safe landing site")),
+          "Name/legacy command resolves profile and coordinates: " + argument);
+    }
+    saved.enabled = enabled;
+    invoke("listing", new Class<?>[] {Player.class, String.class}, player, "blocks");
+    int count = draft.blocks.size();
+    try {
+      invoke("duplicate", new Class<?>[] {Player.class, String.class, String.class, String.class},
+          player, "blocks", "Example", draft.blocks.get("Example").name.toUpperCase(Locale.ROOT));
+      throw new AssertionError("Duplicate name should be rejected");
+    } catch (RuntimeException expected) {
+      check(expected.getCause() instanceof InvocationTargetException
+          && expected.getCause().getCause() instanceof IllegalArgumentException, "Duplicate name rejected");
+    }
+    check(count == draft.blocks.size(), "Duplicate rejection creates no phantom resource");
+    plugin.menus.open(player);
+  }
+
+  private ItemStack menuItem(String prefix) {
+    for (int slot = 0; slot < 54; slot++)
+      if (label(slot).startsWith(prefix)) return top.get().getItem(slot);
+    throw new AssertionError("Missing menu item: " + prefix);
   }
 
   private void click(String prefix) {

@@ -68,11 +68,7 @@ public class SupplyDropsPlugin extends JavaPlugin implements CommandExecutor, Ta
   }
 
   private String resolveProfile(String value) {
-    if (config.current.profiles.containsKey(value)) return value;
-    return config.current.profiles.keySet().stream()
-        .filter(k -> k.equalsIgnoreCase(value))
-        .findFirst()
-        .orElseThrow(() -> new IllegalArgumentException("Unknown profile ID; use tab completion"));
+    return ResourceNames.resolveProfile(config.current.profiles, value);
   }
 
   @Override
@@ -94,12 +90,12 @@ public class SupplyDropsPlugin extends JavaPlugin implements CommandExecutor, Ta
                 .forEach(
                     d ->
                         sender.sendMessage(
-                            Events.shortId(d) + " " + d.stage + " " + Events.coordinates(d)));
+                            Events.label(d) + " " + d.stage + " " + Events.coordinates(d)));
         }
         case "spawn" -> {
           permission(sender, "spawn");
           Validation.require(
-              args.length == 2 || args.length == 6, "Usage: /sd spawn <profile-id> [world x y z]");
+              args.length == 2 || args.length == 6, "Usage: /sd spawn <profile-name> [world x y z]");
           Location location = null;
           if (args.length == 6) {
             World w = Bukkit.getWorld(args[2]);
@@ -123,7 +119,7 @@ public class SupplyDropsPlugin extends JavaPlugin implements CommandExecutor, Ta
             case "retry" -> events.retry(d);
             default ->
                 sender.sendMessage(
-                    Events.shortId(d)
+                    Events.label(d)
                         + " • "
                         + d.stage
                         + " • "
@@ -157,7 +153,8 @@ public class SupplyDropsPlugin extends JavaPlugin implements CommandExecutor, Ta
       if (sender.hasPermission("supplydrops.manage"))
         options.addAll(List.of("cancel", "unlock", "retry"));
     } else if (args.length == 2) {
-      if (args[0].equalsIgnoreCase("spawn")) options.addAll(config.current.profiles.keySet());
+      if (args[0].equalsIgnoreCase("spawn"))
+        options.addAll(config.current.profiles.values().stream().map(p -> p.name).toList());
       else options.addAll(events.active().stream().map(Events::shortId).toList());
     } else if (args.length == 3 && args[0].equalsIgnoreCase("spawn"))
       options.addAll(Bukkit.getWorlds().stream().map(World::getName).toList());

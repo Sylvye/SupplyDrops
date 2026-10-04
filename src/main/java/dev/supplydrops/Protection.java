@@ -140,7 +140,8 @@ public final class Protection implements Listener {
 
   @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
   public void change(EntityChangeBlockEvent e) {
-    if (events.owner(e.getEntity()) != null || events.protectedBlock(e.getBlock()))
+    boolean guardianWither = e.getEntity() instanceof Wither && events.guardian(e.getEntity()) != null;
+    if (events.owner(e.getEntity()) != null && !guardianWither || events.protectedBlock(e.getBlock()))
       e.setCancelled(true);
   }
 
@@ -152,8 +153,8 @@ public final class Protection implements Listener {
       e.setCancelled(true);
       return;
     }
-    if (events.guardian(e.getEntity()) != null) {
-      // Only combat kills can advance the encounter; terrain cannot silently defeat it.
+    var guardian = events.guardian(e.getEntity());
+    if (guardian != null && guardian.spec.damageImmune) {
       boolean combat =
           e instanceof EntityDamageByEntityEvent by
               && (by.getDamager() instanceof Player

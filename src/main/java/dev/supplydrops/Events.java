@@ -128,6 +128,7 @@ public final class Events {
 
   public void recover() {
     for (Drop d : data.drops.values()) {
+      for (Guardian guardian : d.guardians) GuardianAttributes.migrate(guardian.spec);
       if (d.settings == null) d.settings = legacy(d.profile);
       if (d.initialHeight <= 0) d.initialHeight = initialHeight(d);
       World w = Bukkit.getWorld(d.world);
@@ -142,6 +143,7 @@ public final class Events {
             if (guardian.token.equals(
                 mob.getPersistentDataContainer().get(guardianKey, PersistentDataType.STRING))) {
               if (mob.isGlowing()) d.glowRevealed = true;
+              GuardianAttributes.apply(guardian.spec, mob);
               var maximum = mob.getAttribute(Attribute.MAX_HEALTH);
               if (maximum != null && guardian.health > 0)
                 mob.setHealth(Math.min(guardian.health, maximum.getValue()));
@@ -205,9 +207,10 @@ public final class Events {
     }
     Config c = plugin.config.current;
     Profile p = c.profiles.get(profileId);
+    List<World> worlds;
     try {
       Validation.require(p != null, "Unknown profile");
-      Validation.profile(p, c);
+      worlds = Validation.spawnProfile(p, c);
       Validation.require(p.enabled, "Enable this profile first");
     } catch (Exception e) {
       reply.accept(e.getMessage());
@@ -215,9 +218,9 @@ public final class Events {
     }
     World w =
         explicit == null
-            ? Bukkit.getWorld(p.worlds.get(rng.nextInt(p.worlds.size())))
+            ? worlds.get(rng.nextInt(worlds.size()))
             : explicit.getWorld();
-    if (w == null || !p.worlds.contains(w.getName())) {
+    if (w == null || !worlds.contains(w)) {
       reply.accept("World is not enabled for this profile");
       return;
     }
@@ -297,7 +300,7 @@ public final class Events {
             () -> {
               searching.remove(w.getName());
               announce(d);
-              reply.accept("Event " + shortId(d) + " announced at " + coordinates(d));
+              reply.accept("Event " + label(d) + " announced at " + coordinates(d));
             });
         return;
       }
@@ -330,6 +333,10 @@ public final class Events {
 
   public static String shortId(Drop d) {
     return d.id.substring(0, 8);
+  }
+
+  public static String label(Drop d) {
+    return (d.profile == null ? "Supply_drop" : d.profile.name) + " • " + shortId(d);
   }
 
   public static String coordinates(Drop d) {
@@ -624,10 +631,10 @@ public final class Events {
       mob.customName(MiniMessage.miniMessage().deserialize(g.spec.name));
       mob.setCustomNameVisible(true);
     }
-    if (g.spec.health > 0 && mob.getAttribute(Attribute.MAX_HEALTH) != null)
-      mob.getAttribute(Attribute.MAX_HEALTH).setBaseValue(g.spec.health);
+    GuardianAttributes.apply(g.spec, mob);
     double max = Objects.requireNonNull(mob.getAttribute(Attribute.MAX_HEALTH)).getValue();
-    mob.setHealth(Math.max(1, Math.min(max, g.health > 0 ? g.health : max)));
+    mob.setHealth(Math.min(max, g.health > 0 ? g.health : max));
+    if (mob instanceof Wither wither && g.health < 0) wither.enterInvulnerabilityPhase();
     if (mob instanceof PiglinAbstract p) p.setImmuneToZombification(true);
     if (mob instanceof Hoglin h) h.setImmuneToZombification(true);
     if (mob instanceof Ageable a) a.setAdult();
@@ -740,10 +747,10 @@ public final class Events {
 
   private void pause(Drop d, String error) {
     d.error = error == null ? "Unknown event failure" : error;
-    plugin.getLogger().warning("Paused " + shortId(d) + ": " + d.error);
+    plugin.getLogger().warning("Paused " + label(d) + ": " + d.error);
     for (Player p : Bukkit.getOnlinePlayers())
       if (p.hasPermission("supplydrops.manage"))
-        p.sendMessage(Component.text("SupplyDrops • " + shortId(d) + ": " + d.error));
+        p.sendMessage(Component.text("SupplyDrops • " + label(d) + ": " + d.error));
     checkpoint(d, () -> {});
   }
 

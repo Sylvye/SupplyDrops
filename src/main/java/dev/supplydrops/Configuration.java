@@ -13,12 +13,25 @@ public final class Configuration {
   public long revision;
   private boolean saving;
 
-  /** Only global defaults migrate. Event snapshots keep their former speed. */
+  /** Migrate configuration names and defaults without changing stable reference keys. */
   static boolean migrate(Config config) {
-    if (config.schemaVersion >= 1) return false;
-    if (config.settings == null) config.settings = new Settings();
-    if (config.settings.speed == .5) config.settings.speed = 3;
-    config.schemaVersion = 1;
+    if (config.schemaVersion >= 3) return false;
+    if (config.schemaVersion < 1) {
+      if (config.settings == null) config.settings = new Settings();
+      if (config.settings.speed == .5) config.settings.speed = 3;
+    }
+    if (config.schemaVersion < 2) {
+      ResourceNames.migrate(config.profiles);
+      ResourceNames.migrate(config.blocks);
+      ResourceNames.migrate(config.items);
+      ResourceNames.migrate(config.guardians);
+      for (EncounterTable table : config.guardians.values())
+        for (Encounter encounter : table.entries) encounter.name = ResourceNames.normalize(encounter.name);
+    }
+    for (EncounterTable table : config.guardians.values())
+      for (Encounter encounter : table.entries)
+        for (MobSpec mob : encounter.mobs) GuardianAttributes.migrate(mob);
+    config.schemaVersion = 3;
     return true;
   }
 
@@ -69,13 +82,13 @@ public final class Configuration {
     Config c = new Config();
     migrate(c);
     BlockTable b = new BlockTable();
-    b.name = "Example materials";
+    b.name = "Example_materials";
     b.entries.add(new BlockEntry("GOLD_BLOCK", 10));
     b.entries.add(new BlockEntry("CHEST", 5));
     b.entries.add(new BlockEntry("WAXED_COPPER_CHEST", 1));
     c.blocks.put("Example", b);
     ItemTable i = new ItemTable();
-    i.name = "Example treasure";
+    i.name = "Example_treasure";
     ItemEntry diamonds = new ItemEntry(Loot.encode(new ItemStack(Material.DIAMOND)));
     diamonds.max = 3;
     i.entries.add(diamonds);
@@ -86,7 +99,7 @@ public final class Configuration {
     i.entries.add(bread);
     c.items.put("Example", i);
     EncounterTable t = new EncounterTable();
-    t.name = "Example encounters";
+    t.name = "Example_encounters";
     t.entries.add(
         encounter("Raiders", 1, "RAVAGER", 3, "EVOKER", 1, "PILLAGER", 5, "VINDICATOR", 5));
     t.entries.add(encounter("Nether patrol", 2, "PIGLIN_BRUTE", 8, "HOGLIN", 4));
@@ -95,7 +108,7 @@ public final class Configuration {
     t.entries.add(encounter("EMPTY", 5));
     c.guardians.put("Example", t);
     Profile p = new Profile();
-    p.name = "Example supply drop";
+    p.name = "Example_supply_drop";
     p.worlds.add(Bukkit.getWorlds().getFirst().getName());
     for (String type : Loot.containers()) p.containers.put(type, "Example");
     c.profiles.put("Example", p);
@@ -104,7 +117,7 @@ public final class Configuration {
 
   private static Encounter encounter(String name, double weight, Object... specs) {
     Encounter e = new Encounter();
-    e.name = name;
+    e.name = ResourceNames.normalize(name);
     e.weight = weight;
     for (int i = 0; i < specs.length; i += 2) {
       MobSpec m = new MobSpec();

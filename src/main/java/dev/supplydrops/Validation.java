@@ -74,23 +74,15 @@ public final class Validation {
   public static void encounters(EncounterTable t, Config config) {
     require(!t.entries.isEmpty(), "Guardian table needs an encounter (EMPTY is allowed)");
     for (Encounter e : t.entries) {
+      ResourceNames.validate(e.name);
       weight(e.weight);
       int total = 0;
       for (MobSpec m : e.mobs) {
         EntityType type = EntityType.valueOf(m.type);
-        require(
-            type.isSpawnable()
-                && type.getEntityClass() != null
-                && Mob.class.isAssignableFrom(type.getEntityClass()),
-            "Choose a living mob");
-        require(
-            type != EntityType.ENDER_DRAGON && type != EntityType.WITHER,
-            "Destructive bosses are unsupported");
+        require(guardianType(type), "Choose a supported living mob (Ender Dragon is unsupported)");
         range(m.count, 1, 64, "Mob count");
         total += m.count;
-        require(
-            Double.isFinite(m.health) && m.health >= 0 && m.health <= 1024,
-            "Health must be 0 (vanilla) to 1024");
+        GuardianAttributes.validate(m);
         require(
             Double.isFinite(m.radius) && m.radius >= 4 && m.radius <= 128, "Radius must be 4–128");
         for (var eq : m.equipment.entrySet()) {
@@ -116,8 +108,6 @@ public final class Validation {
     range(p.maxRolls, p.minRolls, 256, "Maximum blocks");
     range(p.intervalMinutes, 1, 10080, "Interval minutes");
     range(p.minPlayers, 0, 10000, "Minimum players");
-    require(!p.worlds.isEmpty(), "Choose at least one world");
-    for (String w : p.worlds) require(Bukkit.getWorld(w) != null, "World is unavailable: " + w);
     require(c.blocks.containsKey(p.blockTable), "Choose a block table");
     blockTable(c.blocks.get(p.blockTable));
     require(c.guardians.containsKey(p.guardianTable), "Choose a guardian table");
@@ -131,7 +121,34 @@ public final class Validation {
       }
   }
 
+  static boolean guardianType(EntityType type) {
+    return type.isSpawnable() && type.getEntityClass() != null
+        && Mob.class.isAssignableFrom(type.getEntityClass()) && type != EntityType.ENDER_DRAGON;
+  }
+
+  /** World availability is checked when running a profile, not when saving editor drafts. */
+  public static List<World> spawnProfile(Profile p, Config c) {
+    profile(p, c);
+    List<World> worlds = p.worlds.stream()
+        .filter(name -> name != null && !name.isBlank())
+        .map(Bukkit::getWorld)
+        .filter(Objects::nonNull)
+        .distinct()
+        .toList();
+    require(!worlds.isEmpty(), "No available worlds for this profile; choose a world in Profile › Worlds");
+    return worlds;
+  }
+
   public static void config(Config c) {
+    ResourceNames.validateAll(c.profiles);
+    ResourceNames.validateAll(c.blocks);
+    ResourceNames.validateAll(c.items);
+    ResourceNames.validateAll(c.guardians);
+    for (EncounterTable table : c.guardians.values())
+      for (Encounter encounter : table.entries) {
+        ResourceNames.validate(encounter.name);
+        for (MobSpec mob : encounter.mobs) GuardianAttributes.validate(mob);
+      }
     range(c.maxActivePerWorld, 1, 10, "Concurrent events");
     require(c.settings != null, "Global settings are missing");
     Settings settings = c.settings;
